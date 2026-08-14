@@ -19,34 +19,33 @@
 
 #include "core/span.hpp"
 #include "protocol/constants.hpp"
+#include "protocol/utf8.hpp"
 
 namespace minimosq {
 
-// Valid topic name for a PUBLISH: non-empty, no wildcards, no NUL.
+// Valid topic name for a PUBLISH: non-empty, well-formed UTF-8, no
+// wildcards.
 inline bool topic_name_valid(StrView name) {
-    if (name.empty() || name.len > max_utf8_len) {
+    if (name.empty() || name.len > max_utf8_len || !utf8_valid(name)) {
         return false;
     }
     for (size_t i = 0; i < name.len; ++i) {
         const char c = name[i];
-        if (c == '#' || c == '+' || c == '\0') {
+        if (c == '#' || c == '+') {
             return false;
         }
     }
     return true;
 }
 
-// Valid topic filter for a SUBSCRIBE/UNSUBSCRIBE: wildcards only in
-// whole-level positions, '#' only at the end.
+// Valid topic filter for a SUBSCRIBE/UNSUBSCRIBE: well-formed UTF-8,
+// wildcards only in whole-level positions, '#' only at the end.
 inline bool topic_filter_valid(StrView f) {
-    if (f.empty() || f.len > max_utf8_len) {
+    if (f.empty() || f.len > max_utf8_len || !utf8_valid(f)) {
         return false;
     }
     for (size_t i = 0; i < f.len; ++i) {
         const char c = f[i];
-        if (c == '\0') {
-            return false;
-        }
         if (c == '#') {
             if (i + 1 != f.len) {
                 return false;  // '#' must be last [MQTT-4.7.1-2]

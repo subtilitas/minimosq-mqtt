@@ -47,11 +47,28 @@ TEST(publisher_receives_own_publish_when_subscribed) {
     expect_publish(x.t, 0, "loop", wire::bs("me"), QoS::at_most_once, false);
 }
 
-TEST(invalid_filter_gets_failure_code) {
+TEST(malformed_filter_closes_connection) {
+    // Ill-formed filters are protocol violations, not per-entry
+    // failures [MQTT-4.7.3-1]: no SUBACK, connection dropped.
     Bed x;
     connected(x, 0, "alice");
-    x.feed(0, wire::make_subscribe(9, {{"ok/+", 0}, {"bad/#/x", 1}, {"also+bad", 0}}));
-    const uint8_t codes[] = {0x00, 0x80, 0x80};
+    x.feed(0, wire::make_subscribe(9, {{"ok/+", 0}, {"bad/#/x", 1}}));
+    expect_silence(x.t, 0);
+    CHECK(x.t.logs[0].closed);
+
+    Bed y;
+    connected(y, 0, "bob");
+    y.feed(0, wire::make_unsubscribe(3, {"also+bad"}));
+    expect_silence(y.t, 0);
+    CHECK(y.t.logs[0].closed);
+}
+
+TEST(overlong_filter_gets_failure_code) {
+    // Valid but beyond max_topic_len (32): a capacity refusal, 0x80.
+    Bed x;
+    connected(x, 0, "alice");
+    x.feed(0, wire::make_subscribe(9, {{"ok", 1}, {"a/very/long/filter/topic/name/beyond", 0}}));
+    const uint8_t codes[] = {0x01, 0x80};
     expect_suback(x.t, 0, 9, codes);
     CHECK(!x.t.logs[0].closed);
 }

@@ -61,6 +61,13 @@ TEST(connect_overlong_client_id_rejected) {
     CHECK(x.t.logs[0].closed);
 }
 
+TEST(ill_formed_utf8_client_id_closes_silently) {
+    Bed x;
+    x.connect(0, "\xC0\xAF");  // overlong-encoded '/': ill-formed UTF-8
+    expect_silence(x.t, 0);    // no CONNACK [MQTT-1.5.3-1]
+    CHECK(x.t.logs[0].closed);
+}
+
 TEST(first_packet_must_be_connect) {
     Bed x;
     x.open(0);
