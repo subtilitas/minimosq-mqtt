@@ -276,19 +276,14 @@ private:
         return retained_.set(topic, payload, qos);
     }
 
-    // Deliver a message to every matching subscriber. This stage of the
-    // library grants only QoS 0 (see handle_subscribe), so the effective
-    // delivery QoS is always 0 and one pre-built packet serves everyone.
+    // Deliver a message to every matching subscriber. Each session gets
+    // the message once, at min(publish QoS, max granted QoS over its
+    // matching subscriptions) [MQTT-3.3.5]. QoS 0 is sent straight
+    // through; QoS 1/2 goes via the session's pending queue (which also
+    // covers offline persistent sessions). Packets are built per
+    // subscriber for simplicity — out_ is never held across a send.
     void route_publish(StrView topic, ByteSpan payload, QoS qos) {
-        const ByteSpan pkt = build_publish(out_, sizeof out_, topic, payload,
-                                           QoS::at_most_once, false, false, 0);
-        if (pkt.empty()) {
-            return;
-        }
         sessions_.for_each([&](SessionT& s) {
-            if (!s.connected()) {
-                return;
-            }
             bool matched = false;
             QoS granted_max = QoS::at_most_once;
             for (const typename SessionT::Subscription& sub : s.subs) {
@@ -300,10 +295,86 @@ private:
             if (!matched) {
                 return;
             }
+            const bool online = s.connected() && !conns_[s.conn].dead;
             const QoS eff = qos_min(qos, granted_max);
-            (void)eff;  // always at_most_once here; used once QoS 1/2 delivery lands
-            send_to(s.conn, pkt);
+            if (eff == QoS::at_most_once) {
+                if (online) {  // QoS 0 is not queued for offline sessions
+                    send_to(s.conn, build_publish(out_, sizeof out_, topic, payload,
+                                                  QoS::at_most_once, false, false, 0));
+                }
+            } else if (online || !s.clean_session) {
+                enqueue(s, topic, payload, eff, /*retain=*/false);
+            }
         });
+    }
+
+    // Append a QoS 1/2 delivery to a session's queue and, if the client
+    // is online, put it on the wire.
+    void enqueue(SessionT& s, StrView topic, ByteSpan payload, QoS eff, bool retain) {
+        if (topic.len > Traits::max_topic_len || payload.len > Traits::max_payload_len) {
+            // Documented policy: too large for owned storage — this
+            // subscriber is skipped. Size max_payload_len >=
+            // max_packet_size to rule this out entirely.
+            return;
+        }
+        typename SessionT::OutMsg* m = s.pending.emplace_back();
+        if (m == nullptr) {
+            return;  // queue full: the newest message is dropped (documented)
+        }
+        m->topic.assign(topic);
+        m->payload.assign(payload);
+        m->qos = eff;
+        m->retain = retain;
+        if (s.connected() && !conns_[s.conn].dead) {
+            pump_session(s);
+        }
+    }
+
+    // Send every not-yet-sent queued entry of a connected session.
+    void pump_session(SessionT& s) {
+        for (size_t i = 0; i < s.pending.size(); ++i) {
+            if (conns_[s.conn].dead) {
+                return;
+            }
+            typename SessionT::OutMsg& m = s.pending[i];
+            if (m.state != OutState::queued) {
+                continue;
+            }
+            m.packet_id = s.alloc_packet_id();
+            m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
+                                                    : OutState::awaiting_pubrec;
+            send_to(s.conn, build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
+                                          m.qos, m.retain, m.dup, m.packet_id));
+        }
+    }
+
+    // On reconnect of a persistent session: retransmit in-flight
+    // messages with DUP=1 and unacknowledged PUBRELs, then flush the
+    // offline queue — in original order [MQTT-4.4.0-1, MQTT-4.6].
+    void resume_session(SessionT& s) {
+        for (size_t i = 0; i < s.pending.size(); ++i) {
+            if (conns_[s.conn].dead) {
+                return;
+            }
+            typename SessionT::OutMsg& m = s.pending[i];
+            switch (m.state) {
+            case OutState::queued:
+                m.packet_id = s.alloc_packet_id();
+                m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
+                                                        : OutState::awaiting_pubrec;
+                break;
+            case OutState::awaiting_puback:
+            case OutState::awaiting_pubrec:
+                m.dup = true;
+                break;
+            case OutState::awaiting_pubcomp:
+                send_to(s.conn,
+                        build_packet_id_only(out_, sizeof out_, PacketType::pubrel, m.packet_id));
+                continue;
+            }
+            send_to(s.conn, build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
+                                          m.qos, m.retain, m.dup, m.packet_id));
+        }
     }
 
     // ------------------------------------------------- packet dispatch
@@ -334,10 +405,13 @@ private:
             handle_pubrel(ci, body);
             break;
         case PacketType::puback:
+            handle_puback(ci, body);
+            break;
         case PacketType::pubrec:
+            handle_pubrec(ci, body);
+            break;
         case PacketType::pubcomp:
-            // Acks for outbound QoS>0 delivery; nothing can be in flight
-            // while only QoS 0 is granted. Handled in the next stage.
+            handle_pubcomp(ci, body);
             break;
         case PacketType::subscribe:
             handle_subscribe(ci, body);
@@ -464,6 +538,12 @@ private:
         }
 
         send_to(ci, build_connack(out_, sizeof out_, session_present, ConnackCode::accepted));
+
+        // Resumed persistent session: retransmit in-flight deliveries
+        // and flush anything queued while the client was away.
+        if (session_present) {
+            resume_session(*s);
+        }
     }
 
     void handle_publish(size_t ci, uint8_t first_byte, ByteSpan body) {
@@ -503,6 +583,59 @@ private:
             send_to(ci, build_packet_id_only(out_, sizeof out_, PacketType::puback, p.packet_id));
         } else if (p.qos == QoS::exactly_once) {
             send_to(ci, build_packet_id_only(out_, sizeof out_, PacketType::pubrec, p.packet_id));
+        }
+    }
+
+    // Client acknowledged a QoS 1 delivery: the message is done.
+    void handle_puback(size_t ci, ByteSpan body) {
+        Conn& c = conns_[ci];
+        uint16_t id = 0;
+        if (parse_packet_id_only(body, id) != Err::ok) {
+            c.dead = true;
+            return;
+        }
+        SessionT& s = *session_of(c);
+        size_t index = 0;
+        if (s.find_pending(id, OutState::awaiting_puback, OutState::awaiting_puback, &index) !=
+            nullptr) {
+            s.pending.remove_ordered(index);
+        }
+        // Unknown ids are ignored (late/duplicate acks are harmless).
+    }
+
+    // Client received a QoS 2 delivery: release it with PUBREL. A
+    // duplicate PUBREC (entry already awaiting PUBCOMP) repeats the
+    // PUBREL [MQTT-4.3.3].
+    void handle_pubrec(size_t ci, ByteSpan body) {
+        Conn& c = conns_[ci];
+        uint16_t id = 0;
+        if (parse_packet_id_only(body, id) != Err::ok) {
+            c.dead = true;
+            return;
+        }
+        SessionT& s = *session_of(c);
+        typename SessionT::OutMsg* m =
+            s.find_pending(id, OutState::awaiting_pubrec, OutState::awaiting_pubcomp, nullptr);
+        if (m == nullptr) {
+            return;
+        }
+        m->state = OutState::awaiting_pubcomp;
+        send_to(ci, build_packet_id_only(out_, sizeof out_, PacketType::pubrel, id));
+    }
+
+    // Client completed a QoS 2 delivery.
+    void handle_pubcomp(size_t ci, ByteSpan body) {
+        Conn& c = conns_[ci];
+        uint16_t id = 0;
+        if (parse_packet_id_only(body, id) != Err::ok) {
+            c.dead = true;
+            return;
+        }
+        SessionT& s = *session_of(c);
+        size_t index = 0;
+        if (s.find_pending(id, OutState::awaiting_pubcomp, OutState::awaiting_pubcomp, &index) !=
+            nullptr) {
+            s.pending.remove_ordered(index);
         }
     }
 
@@ -548,19 +681,22 @@ private:
                 continue;  // this entry was refused above
             }
             retained_.for_each_match(filter, [&](typename RetainedStore<Traits>::Entry& e) {
-                // Effective QoS is min(granted, stored); only QoS 0 is
-                // granted at this stage.
-                const ByteSpan pkt = build_publish(out_, sizeof out_, e.topic.view(),
-                                                   e.payload.view(), QoS::at_most_once,
-                                                   /*retain=*/true, false, 0);
-                send_to(ci, pkt);
+                // Retained delivery at min(granted, stored QoS), with
+                // the retain flag set [MQTT-3.3.1-8].
+                const QoS eff = qos_min(sub->granted, e.qos);
+                if (eff == QoS::at_most_once) {
+                    send_to(ci, build_publish(out_, sizeof out_, e.topic.view(),
+                                              e.payload.view(), QoS::at_most_once,
+                                              /*retain=*/true, false, 0));
+                } else {
+                    enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
+                }
             });
         }
     }
 
     // Apply a single subscription request; returns the SUBACK code.
     uint8_t subscribe_one(SessionT& s, StrView filter, QoS requested) {
-        (void)requested;  // granted QoS is capped at 0 until QoS 1/2 delivery lands
         if (!topic_filter_valid(filter) || filter.len > Traits::max_topic_len) {
             return suback_failure;
         }
@@ -572,7 +708,7 @@ private:
             }
             sub->filter.assign(filter);
         }
-        sub->granted = QoS::at_most_once;
+        sub->granted = requested;  // full requested QoS is supported
         return static_cast<uint8_t>(sub->granted);
     }
 

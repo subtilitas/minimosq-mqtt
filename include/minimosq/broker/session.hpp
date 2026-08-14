@@ -19,6 +19,14 @@
 
 namespace minimosq {
 
+// Delivery state of an outbound (broker → client) message.
+enum class OutState : unsigned char {
+    queued,            // waiting to be sent (client offline, or fresh)
+    awaiting_puback,   // QoS 1 PUBLISH sent
+    awaiting_pubrec,   // QoS 2 PUBLISH sent
+    awaiting_pubcomp,  // PUBREC received, PUBREL sent
+};
+
 template <typename Traits>
 struct Session {
     struct Subscription {
@@ -26,10 +34,27 @@ struct Session {
         QoS granted = QoS::at_most_once;
     };
 
+    // An owned copy of a QoS 1/2 message being delivered to this
+    // session (in flight, or queued while the client is offline).
+    struct OutMsg {
+        FixedString<Traits::max_topic_len> topic;
+        FixedBuffer<Traits::max_payload_len> payload;
+        uint16_t packet_id = 0;
+        QoS qos = QoS::at_least_once;
+        OutState state = OutState::queued;
+        bool retain = false;  // set only for retained delivery on subscribe
+        bool dup = false;     // set when retransmitting after reconnect
+    };
+
     static constexpr uint16_t no_conn = 0xFFFF;
 
     FixedString<Traits::max_client_id_len> client_id;
     StaticVector<Subscription, Traits::max_subscriptions_per_session> subs;
+
+    // Outbound deliveries in order; in-order delivery relies on ordered
+    // removal. Survives reconnects of a persistent session.
+    StaticVector<OutMsg, Traits::max_pending_per_session> pending;
+    uint16_t last_packet_id = 0;
 
     // Inbound QoS 2 PUBLISH packet ids between PUBLISH and PUBREL,
     // for exactly-once delivery. Survives reconnects of a persistent
@@ -74,6 +99,39 @@ struct Session {
                 return;
             }
         }
+    }
+
+    // Next unused outbound packet id (non-zero, [MQTT-2.3.1]).
+    uint16_t alloc_packet_id() noexcept {
+        bool in_use = true;
+        while (in_use) {
+            ++last_packet_id;
+            if (last_packet_id == 0) {
+                last_packet_id = 1;
+            }
+            in_use = false;
+            for (const OutMsg& m : pending) {
+                if (m.state != OutState::queued && m.packet_id == last_packet_id) {
+                    in_use = true;
+                    break;
+                }
+            }
+        }
+        return last_packet_id;
+    }
+
+    // First pending entry with a given id in one of the given states.
+    OutMsg* find_pending(uint16_t id, OutState a, OutState b, size_t* index) noexcept {
+        for (size_t i = 0; i < pending.size(); ++i) {
+            if (pending[i].packet_id == id &&
+                (pending[i].state == a || pending[i].state == b)) {
+                if (index != nullptr) {
+                    *index = i;
+                }
+                return &pending[i];
+            }
+        }
+        return nullptr;
     }
 };
 

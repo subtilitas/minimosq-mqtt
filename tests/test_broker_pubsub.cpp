@@ -18,7 +18,7 @@ TEST(subscribe_gets_suback) {
     Bed x;
     connected(x, 0, "alice");
     x.feed(0, wire::make_subscribe(5, {{"a/+", 0}, {"b/#", 2}}));
-    const uint8_t codes[] = {0x00, 0x00};  // QoS 0 granted at this stage
+    const uint8_t codes[] = {0x00, 0x02};  // requested QoS granted
     expect_suback(x.t, 0, 5, codes);
 }
 
