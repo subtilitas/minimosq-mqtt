@@ -43,7 +43,12 @@ public:
     }
 
     void bytes(ByteSpan b) noexcept {
-        if (!ok_ || len_ + b.len > cap_) {
+        // Written as remaining-space comparison (len_ <= cap_ is an
+        // invariant, so cap_ - len_ cannot underflow): equivalent to
+        // len_ + b.len > cap_, but lets the optimizer prove the copy
+        // below stays in bounds (GCC -O2 otherwise reports a
+        // -Wstringop-overflow false positive on an infeasible path).
+        if (!ok_ || b.len > cap_ - len_) {
             ok_ = false;
             return;
         }
