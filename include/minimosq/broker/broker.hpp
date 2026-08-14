@@ -42,6 +42,7 @@
 #include "../protocol/constants.hpp"
 #include "../protocol/frame.hpp"
 #include "../protocol/packets.hpp"
+#include "../protocol/utf8.hpp"
 #include "../protocol/writer.hpp"
 #include "../topic.hpp"
 #include "config.hpp"
@@ -510,6 +511,12 @@ private:
             refuse(ci, ConnackCode::identifier_rejected);
             return;
         }
+        // Ill-formed UTF-8 anywhere requires closing the connection
+        // [MQTT-1.5.3-1/-2]. (Passwords are binary data.)
+        if (!utf8_valid(client_id) || (p.has_username && !utf8_valid(p.username))) {
+            c.dead = true;
+            return;
+        }
         if (p.has_will) {
             if (!topic_name_valid(p.will_topic)) {
                 c.dead = true;  // will topic must be a valid name [MQTT-3.1.3.1]
@@ -701,10 +708,15 @@ private:
 
         StrView filter;
         QoS requested = QoS::at_most_once;
+        bool violation = false;
         while (entries.next(filter, requested)) {
+            if (!topic_filter_valid(filter)) {
+                violation = true;  // ill-formed filter [MQTT-4.7.3-1, -1.5.3-1]
+                break;
+            }
             w.u8(subscribe_one(s, filter, requested));
         }
-        if (entries.status() != Err::ok || !w.ok()) {
+        if (violation || entries.status() != Err::ok || !w.ok()) {
             c.dead = true;  // protocol error: close without SUBACK [MQTT-4.8]
             return;
         }
@@ -733,9 +745,10 @@ private:
         }
     }
 
-    // Apply a single subscription request; returns the SUBACK code.
+    // Apply a single (syntactically valid) subscription request;
+    // returns the SUBACK code — 0x80 for capacity refusals.
     uint8_t subscribe_one(SessionT& s, StrView filter, QoS requested) {
-        if (!topic_filter_valid(filter) || filter.len > Traits::max_topic_len) {
+        if (filter.len > Traits::max_topic_len) {
             return suback_failure;
         }
         typename SessionT::Subscription* sub = s.find_sub(filter);
@@ -758,6 +771,10 @@ private:
         StrView filter;
         QoS ignored = QoS::at_most_once;
         while (entries.next(filter, ignored)) {
+            if (!topic_filter_valid(filter)) {
+                c.dead = true;  // ill-formed filter [MQTT-4.7.3-1]
+                return;
+            }
             for (size_t i = 0; i < s.subs.size(); ++i) {
                 if (s.subs[i].filter.equals(filter)) {
                     s.subs.remove_ordered(i);  // exact match only [MQTT-3.10.4]

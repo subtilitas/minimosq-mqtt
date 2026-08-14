@@ -83,6 +83,10 @@ the tail of each entry point tears connections down until quiescence.
 
 | Situation | Behaviour |
 |---|---|
+| Ill-formed UTF-8 in any MQTT string | connection closed, as [MQTT-1.5.3] requires |
+| Syntactically invalid topic filter in (UN)SUBSCRIBE | protocol violation: connection closed |
+| Valid filter beyond `max_topic_len`, or subscription table full | SUBACK 0x80 for that entry |
+| Duplicate identical filter within one SUBSCRIBE | retained message delivered once per entry |
 | Empty client id, clean session | server assigns a unique `mmq-<n>` id |
 | Empty client id, persistent session | CONNACK 0x02, connection closed |
 | Retained store full / message too big to store | best effort: not stored, still forwarded live |

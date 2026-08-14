@@ -73,6 +73,30 @@ TEST(exact_matching) {
     CHECK(topic_matches("a//b", "a//b"));
 }
 
+TEST(utf8_validation) {
+    CHECK(utf8_valid("plain ascii"));
+    CHECK(utf8_valid("caf\xC3\xA9"));                  // é
+    CHECK(utf8_valid("\xE2\x82\xAC"));                 // €
+    CHECK(utf8_valid("\xF0\x9F\x99\x82"));             // U+1F642
+
+    CHECK(!utf8_valid(StrView("a\0b", 3)));            // U+0000 forbidden
+    CHECK(!utf8_valid("\xC3"));                        // truncated sequence
+    CHECK(!utf8_valid("\x80"));                        // stray continuation
+    CHECK(!utf8_valid("\xC0\xAF"));                    // overlong '/'
+    CHECK(!utf8_valid("\xE0\x80\xAF"));                // overlong, 3 bytes
+    CHECK(!utf8_valid("\xED\xA0\x80"));                // UTF-16 surrogate D800
+    CHECK(!utf8_valid("\xF4\x90\x80\x80"));            // above U+10FFFF
+    CHECK(!utf8_valid("\xFF\xFE"));                    // invalid lead bytes
+}
+
+TEST(ill_formed_utf8_invalidates_topics_and_filters) {
+    CHECK(!topic_name_valid("\xFF\xFE"));
+    CHECK(!topic_name_valid("a/\xC0\xAF"));
+    CHECK(!topic_filter_valid("\xED\xA0\x80/#"));
+    CHECK(topic_name_valid("caf\xC3\xA9/temp"));
+    CHECK(topic_filter_valid("caf\xC3\xA9/+"));
+}
+
 TEST(dollar_topics_not_matched_by_leading_wildcards) {
     CHECK(!topic_matches("#", "$SYS/broker/clients"));
     CHECK(!topic_matches("+/broker/clients", "$SYS/broker/clients"));
