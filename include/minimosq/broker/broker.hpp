@@ -147,6 +147,9 @@ public:
         if (!topic_name_valid(topic)) {
             return Err::malformed;
         }
+        if (2 + topic.len + payload.len > out_size - packet_overhead) {
+            return Err::oversize;  // could never be built for any subscriber
+        }
         Err result = Err::ok;
         if (retain && !apply_retain(topic, payload, qos)) {
             result = Err::capacity;  // delivery still happens below
