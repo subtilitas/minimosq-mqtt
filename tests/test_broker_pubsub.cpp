@@ -298,3 +298,14 @@ TEST(app_publish_reaches_subscribers) {
     CHECK(x.b.publish("app/x", wire::bs("hi"), QoS::at_most_once, false) == Err::ok);
     expect_publish(x.t, 0, "app/x", wire::bs("hi"), QoS::at_most_once, false);
 }
+
+TEST(app_publish_too_large_reports_oversize) {
+    Bed x;  // out buffer fits max_packet_size == 256 body bytes
+    connected(x, 0, "sub");
+    x.feed(0, wire::make_subscribe(1, {{"app/#", 0}}));
+    x.t.next(0);
+    uint8_t big[300] = {};
+    CHECK(x.b.publish("app/x", ByteSpan{big, sizeof big}, QoS::at_most_once, false) ==
+          Err::oversize);
+    expect_silence(x.t, 0);  // nothing partially delivered
+}

@@ -79,7 +79,13 @@ public:
         size_t slot_of[MaxConns + 1];
         nfds_t n = 0;
 
-        if (listen_fd_ >= 0) {
+        // After a hard accept() failure (e.g. fd exhaustion) the
+        // listener stays readable forever; pause it briefly instead of
+        // busy-spinning the loop.
+        const bool listener_paused =
+            accept_backoff_armed_ &&
+            static_cast<int32_t>(posix_now_ms() - accept_retry_at_ms_) < 0;
+        if (listen_fd_ >= 0 && !listener_paused) {
             pfds[n].fd = listen_fd_;
             pfds[n].events = POLLIN;
             pfds[n].revents = 0;
@@ -153,10 +159,18 @@ private:
 
     template <typename B>
     void accept_new(B& broker, uint32_t now) {
+        accept_backoff_armed_ = false;
         while (true) {
             const int fd = ::accept(listen_fd_, nullptr, nullptr);
             if (fd < 0) {
-                return;  // EAGAIN or transient error: try again next poll
+                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR &&
+                    errno != ECONNABORTED) {
+                    // Hard failure (EMFILE/ENFILE/...): the pending
+                    // connection stays in the backlog, so back off.
+                    accept_backoff_armed_ = true;
+                    accept_retry_at_ms_ = now + 1000;
+                }
+                return;
             }
             size_t ci = MaxConns;
             for (size_t i = 0; i < MaxConns; ++i) {
@@ -219,6 +233,8 @@ private:
     }
 
     Slot slots_[MaxConns];
+    uint32_t accept_retry_at_ms_ = 0;
+    bool accept_backoff_armed_ = false;
     volatile sig_atomic_t running_ = 1;
 };
 
