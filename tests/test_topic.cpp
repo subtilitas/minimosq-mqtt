@@ -73,6 +73,33 @@ TEST(exact_matching) {
     CHECK(topic_matches("a//b", "a//b"));
 }
 
+TEST(filter_subsumption) {
+    // cover covers filter: every topic the filter matches, the cover
+    // matches too.
+    CHECK(topic_filter_covers("#", "a/b"));
+    CHECK(topic_filter_covers("#", "#"));
+    CHECK(topic_filter_covers("#", "+/+"));
+    CHECK(topic_filter_covers("home/#", "home/+/temp"));
+    CHECK(topic_filter_covers("home/#", "home"));       // '#' covers the parent
+    CHECK(topic_filter_covers("home/+", "home/kitchen"));
+    CHECK(topic_filter_covers("+", "kitchen"));
+    CHECK(topic_filter_covers("+/+", "home/+"));
+    CHECK(topic_filter_covers("a/b/c", "a/b/c"));
+
+    CHECK(!topic_filter_covers("home/+", "home/#"));    // '#' reaches deeper
+    CHECK(!topic_filter_covers("home/kitchen", "home/+"));
+    CHECK(!topic_filter_covers("home/#", "#"));
+    CHECK(!topic_filter_covers("a/b", "a"));
+    CHECK(!topic_filter_covers("a", "a/b"));
+    CHECK(!topic_filter_covers("+", "#"));
+    CHECK(!topic_filter_covers("a/#", "b/#"));
+
+    // Wildcard covers never reach $-topics.
+    CHECK(!topic_filter_covers("#", "$SYS/#"));
+    CHECK(!topic_filter_covers("+/x", "$SYS/x"));
+    CHECK(topic_filter_covers("$SYS/#", "$SYS/broker/+"));
+}
+
 TEST(utf8_validation) {
     CHECK(utf8_valid("plain ascii"));
     CHECK(utf8_valid("caf\xC3\xA9"));                  // é

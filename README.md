@@ -70,21 +70,39 @@ struct MyTraits {
 The complete memory cost is `sizeof(minimosq::Broker<MyTraits, ...>)`
 — a compile-time constant you can `static_assert` against your budget.
 
-## Authentication
+## Security: authentication and ACLs
 
-Pass a policy as the third template parameter (default accepts
-everyone):
+The third template parameter is a security policy. It authenticates
+each CONNECT and produces a per-session `Context` (any trivially
+copyable type — typically a role id) that every authorization check
+receives:
 
 ```cpp
-struct MyAuth {
-    minimosq::ConnackCode check(minimosq::StrView client_id,
-                                const minimosq::StrView* username,
-                                const minimosq::ByteSpan* password) {
-        // return accepted / bad_credentials / not_authorized
-    }
+struct MySecurity {
+    struct Context { uint8_t role = 0; };
+
+    minimosq::ConnackCode authenticate(minimosq::StrView client_id,
+                                       const minimosq::StrView* username,
+                                       const minimosq::ByteSpan* password,
+                                       Context& ctx);
+    bool authorize_publish(const Context&, minimosq::StrView topic);
+    bool authorize_subscribe(const Context&, minimosq::StrView filter);
+    bool authorize_receive(const Context&, minimosq::StrView topic);
 };
-minimosq::Broker<Traits, Transport, MyAuth> broker{transport};
+minimosq::Broker<Traits, Transport, MySecurity> broker{transport};
 ```
+
+Denied publishes are silently dropped but acknowledged (the
+3.1.1-conformant behaviour), denied subscriptions answer SUBACK 0x80,
+and `authorize_receive` runs per delivery so broad subscriptions never
+leak restricted topics. The default (`AllowAllSecurity`) permits
+everything.
+
+For the common case there is a ready-made deny-by-default policy,
+`minimosq::TableAcl` — fixed user and rule tables mapping credentials
+to roles and roles to readable/writable topic patterns; see
+[examples/tcp_broker_acl.cpp](examples/tcp_broker_acl.cpp) and the
+security section of [docs/design.md](docs/design.md).
 
 ## Custom transports
 

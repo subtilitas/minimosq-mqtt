@@ -15,6 +15,7 @@ minimosq_add_test(test_broker_connect)
 minimosq_add_test(test_broker_pubsub)
 minimosq_add_test(test_broker_qos)
 minimosq_add_test(test_broker_security)
+minimosq_add_test(test_table_acl)
 minimosq_add_test(test_tls_adapter)
 
 # The transport tests exercise real sockets/pipes and are POSIX-only.
