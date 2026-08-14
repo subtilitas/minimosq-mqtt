@@ -18,4 +18,6 @@ minimosq_add_test(test_broker_qos)
 # The transport tests exercise real sockets/pipes and are POSIX-only.
 if(UNIX)
     minimosq_add_test(test_transport_tcp)
+    minimosq_add_test(test_transport_uds)
+    minimosq_add_test(test_transport_pipe)
 endif()
