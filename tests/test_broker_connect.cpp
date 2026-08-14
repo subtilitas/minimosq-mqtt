@@ -31,9 +31,25 @@ TEST(connect_bad_protocol_name_closes_silently) {
     CHECK(x.t.logs[0].closed);
 }
 
-TEST(connect_empty_client_id_rejected) {
+TEST(connect_empty_client_id_gets_assigned_one) {
     Bed x;
+    // Clean session + empty id: the broker assigns an id [MQTT-3.1.3-6].
     x.connect(0, "");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    CHECK(!x.t.logs[0].closed);
+
+    // Two anonymous clients coexist (distinct generated ids, no takeover).
+    x.connect(1, "");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    CHECK(!x.t.logs[0].closed);
+    CHECK(!x.t.logs[1].closed);
+}
+
+TEST(connect_empty_client_id_with_persistent_session_rejected) {
+    Bed x;
+    wire::ConnectOpts o;
+    o.clean = false;  // [MQTT-3.1.3-8]
+    x.connect(0, "", o);
     expect_connack(x.t, 0, false, ConnackCode::identifier_rejected);
     CHECK(x.t.logs[0].closed);
 }

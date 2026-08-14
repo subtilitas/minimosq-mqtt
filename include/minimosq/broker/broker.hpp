@@ -196,6 +196,34 @@ private:
     static QoS qos_min(QoS a, QoS b) noexcept { return a < b ? a : b; }
     static QoS qos_max(QoS a, QoS b) noexcept { return a > b ? a : b; }
 
+    // Server-assigned client ids: "mmq-<n>", unique among live sessions.
+    static constexpr size_t auto_id_len_max = 4 + 5;  // "mmq-" + up to 5 digits
+
+    StrView generate_client_id(char* buf) noexcept {
+        while (true) {
+            ++auto_id_counter_;  // uint16 wrap is fine: uniqueness is checked
+            size_t n = 0;
+            buf[n++] = 'm';
+            buf[n++] = 'm';
+            buf[n++] = 'q';
+            buf[n++] = '-';
+            char digits[5];
+            size_t d = 0;
+            uint16_t v = auto_id_counter_;
+            do {
+                digits[d++] = static_cast<char>('0' + v % 10);
+                v = static_cast<uint16_t>(v / 10);
+            } while (v != 0);
+            while (d > 0) {
+                buf[n++] = digits[--d];
+            }
+            const StrView id{buf, n};
+            if (sessions_.find([&](SessionT& s) { return s.client_id.equals(id); }) == nullptr) {
+                return id;
+            }
+        }
+    }
+
     SessionT* session_of(const Conn& c) noexcept {
         return c.session != no_session ? sessions_.at(c.session) : nullptr;
     }
@@ -466,9 +494,19 @@ private:
             refuse(ci, ConnackCode::unacceptable_protocol);  // [MQTT-3.1.2-2]
             return;
         }
-        // This broker requires a client id (it never auto-assigns one;
-        // rejecting is spec-sanctioned, [MQTT-3.1.3-8/-9]).
-        if (p.client_id.empty() || p.client_id.len > Traits::max_client_id_len) {
+        // Zero-byte client id: assign one for clean sessions (common
+        // client default, [MQTT-3.1.3-6/-7]); reject for persistent
+        // sessions as the spec requires [MQTT-3.1.3-8].
+        char auto_id_buf[auto_id_len_max];
+        StrView client_id = p.client_id;
+        if (client_id.empty()) {
+            if (!p.clean_session) {
+                refuse(ci, ConnackCode::identifier_rejected);
+                return;
+            }
+            client_id = generate_client_id(auto_id_buf);
+        }
+        if (client_id.len > Traits::max_client_id_len) {
             refuse(ci, ConnackCode::identifier_rejected);
             return;
         }
@@ -483,7 +521,7 @@ private:
                 return;
             }
         }
-        const ConnackCode ac = auth_.check(p.client_id, p.has_username ? &p.username : nullptr,
+        const ConnackCode ac = auth_.check(client_id, p.has_username ? &p.username : nullptr,
                                            p.has_password ? &p.password : nullptr);
         if (ac != ConnackCode::accepted) {
             refuse(ci, ac);
@@ -491,14 +529,14 @@ private:
         }
 
         SessionT* existing =
-            sessions_.find([&](SessionT& s) { return s.client_id.equals(p.client_id); });
+            sessions_.find([&](SessionT& s) { return s.client_id.equals(client_id); });
 
         // Session takeover: an existing connection with this client id is
         // dropped like a network failure (its will fires) [MQTT-3.1.4-2].
         if (existing != nullptr && existing->connected()) {
             conns_[existing->conn].dead = true;
             flush_dead();
-            existing = sessions_.find([&](SessionT& s) { return s.client_id.equals(p.client_id); });
+            existing = sessions_.find([&](SessionT& s) { return s.client_id.equals(client_id); });
         }
 
         bool session_present = false;
@@ -518,7 +556,7 @@ private:
                 refuse(ci, ConnackCode::server_unavailable);
                 return;
             }
-            s->client_id.assign(p.client_id);
+            s->client_id.assign(client_id);
         }
 
         s->clean_session = p.clean_session;
@@ -763,6 +801,7 @@ private:
     RetainedStore<Traits> retained_;
     uint8_t out_[out_size];
     uint32_t now_ms_ = 0;
+    uint16_t auto_id_counter_ = 0;
 };
 
 } // namespace minimosq
