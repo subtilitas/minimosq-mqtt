@@ -1,6 +1,6 @@
 // minimosq — the broker core.
 //
-// Broker<Traits, Transport, Auth> is a single-threaded MQTT 3.1.1
+// Broker<Traits, Transport, Security> is a single-threaded MQTT 3.1.1
 // broker. All state lives inside the object (sized by Traits at compile
 // time); after construction it never allocates and never throws.
 //
@@ -51,19 +51,52 @@
 
 namespace minimosq {
 
-// Default authenticator: accept everyone. Provide your own policy with
-// the same signature to check credentials; return bad_credentials or
-// not_authorized to refuse.
-struct AllowAllAuth {
-    ConnackCode check(StrView client_id, const StrView* username, const ByteSpan* password) {
+// The security policy: authentication plus authorization. The broker
+// authenticates once per CONNECT; the policy fills in a Context (any
+// trivially copyable type — a role id, a permission bitmask) that is
+// stored in the session and handed to every authorization check, so
+// per-message checks never re-derive identity.
+//
+// Deny semantics (MQTT 3.1.1-conformant):
+//   - authorize_publish == false  → the message is silently discarded
+//     but still acknowledged (PUBACK/PUBREC); 3.1.1 has no error ack,
+//     and silent drop avoids leaking topic existence [MQTT-3.3.5-2].
+//     Wills pass through the same check when they fire.
+//   - authorize_subscribe == false → SUBACK 0x80 for that entry.
+//   - authorize_receive is checked per delivery (including retained
+//     and queued messages), so a broadly-subscribed client still only
+//     receives what it is cleared for.
+//
+// AllowAllSecurity is the default: every check passes.
+struct AllowAllSecurity {
+    struct Context {};
+
+    ConnackCode authenticate(StrView client_id, const StrView* username,
+                             const ByteSpan* password, Context& ctx) {
         (void)client_id;
         (void)username;
         (void)password;
+        (void)ctx;
         return ConnackCode::accepted;
+    }
+
+    bool authorize_publish(const Context&, StrView topic) {
+        (void)topic;
+        return true;
+    }
+
+    bool authorize_subscribe(const Context&, StrView filter) {
+        (void)filter;
+        return true;
+    }
+
+    bool authorize_receive(const Context&, StrView topic) {
+        (void)topic;
+        return true;
     }
 };
 
-template <typename Traits, typename Transport, typename Auth = AllowAllAuth>
+template <typename Traits, typename Transport, typename Security = AllowAllSecurity>
 class Broker {
 public:
     static constexpr size_t max_connections = Traits::max_connections;
@@ -73,7 +106,7 @@ public:
     Broker(const Broker&) = delete;
     Broker& operator=(const Broker&) = delete;
 
-    Auth& auth() noexcept { return auth_; }
+    Security& security() noexcept { return security_; }
 
     // ------------------------------------------------ transport-side API
 
@@ -163,7 +196,7 @@ public:
 
 private:
     static constexpr uint16_t no_session = 0xFFFF;
-    using SessionT = Session<Traits>;
+    using SessionT = Session<Traits, typename Security::Context>;
 
     struct Conn {
         FrameParser<Traits::max_packet_size> parser;
@@ -276,13 +309,15 @@ private:
             s->conn = SessionT::no_conn;
             if (s->has_will) {
                 // Publish the will exactly like a client PUBLISH
-                // [MQTT-3.1.2-8]: retained if requested, routed to
-                // matching subscribers.
+                // [MQTT-3.1.2-8]: same authorization, retained if
+                // requested, routed to matching subscribers.
                 s->has_will = false;
-                if (s->will_retain) {
-                    apply_retain(s->will_topic.view(), s->will_payload.view(), s->will_qos);
+                if (security_.authorize_publish(s->auth_ctx, s->will_topic.view())) {
+                    if (s->will_retain) {
+                        apply_retain(s->will_topic.view(), s->will_payload.view(), s->will_qos);
+                    }
+                    route_publish(s->will_topic.view(), s->will_payload.view(), s->will_qos);
                 }
-                route_publish(s->will_topic.view(), s->will_payload.view(), s->will_qos);
                 // route_publish may release s only via other sessions'
                 // teardown paths, never s itself (s is disconnected), so
                 // using s afterwards is safe.
@@ -326,6 +361,9 @@ private:
             }
             if (!matched) {
                 return;
+            }
+            if (!security_.authorize_receive(s.auth_ctx, topic)) {
+                return;  // this subscriber is not cleared for the topic
             }
             const bool online = s.connected() && !conns_[s.conn].dead;
             const QoS eff = qos_min(qos, granted_max);
@@ -531,8 +569,10 @@ private:
                 return;
             }
         }
-        const ConnackCode ac = auth_.check(client_id, p.has_username ? &p.username : nullptr,
-                                           p.has_password ? &p.password : nullptr);
+        typename Security::Context auth_ctx{};
+        const ConnackCode ac =
+            security_.authenticate(client_id, p.has_username ? &p.username : nullptr,
+                                   p.has_password ? &p.password : nullptr, auth_ctx);
         if (ac != ConnackCode::accepted) {
             refuse(ci, ac);
             return;
@@ -571,6 +611,7 @@ private:
 
         s->clean_session = p.clean_session;
         s->conn = static_cast<uint16_t>(ci);
+        s->auth_ctx = auth_ctx;  // re-authenticated on every connect
         s->has_will = p.has_will;
         if (p.has_will) {
             s->will_topic.assign(p.will_topic);
@@ -618,7 +659,11 @@ private:
             }
         }
 
-        if (deliver) {
+        // Unauthorized publishes are silently discarded but still
+        // acknowledged below — 3.1.1 has no error ack, and silence
+        // avoids leaking topic existence [MQTT-3.3.5-2]. The QoS 2 id
+        // bookkeeping above is protocol state and happens regardless.
+        if (deliver && security_.authorize_publish(s.auth_ctx, p.topic)) {
             if (p.retain) {
                 // Best-effort store [MQTT-3.3.1-5]; forwarded to current
                 // subscribers with retain=0 either way [MQTT-3.3.1-9].
@@ -717,6 +762,10 @@ private:
                 violation = true;  // ill-formed filter [MQTT-4.7.3-1, -1.5.3-1]
                 break;
             }
+            if (!security_.authorize_subscribe(s.auth_ctx, filter)) {
+                w.u8(suback_failure);  // authorization refusal [MQTT-3.8.4-5]
+                continue;
+            }
             w.u8(subscribe_one(s, filter, requested));
         }
         if (violation || entries.status() != Err::ok || !w.ok()) {
@@ -734,6 +783,9 @@ private:
                 continue;  // this entry was refused above
             }
             retained_.for_each_match(filter, [&](typename RetainedStore<Traits>::Entry& e) {
+                if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
+                    return;
+                }
                 // Retained delivery at min(granted, stored QoS), with
                 // the retain flag set [MQTT-3.3.1-8].
                 const QoS eff = qos_min(sub->granted, e.qos);
@@ -815,7 +867,7 @@ private:
         (Traits::max_packet_size > stored_body_max ? Traits::max_packet_size : stored_body_max);
 
     Transport& tr_;
-    Auth auth_{};
+    Security security_{};
     Conn conns_[max_connections];
     Pool<SessionT, Traits::max_sessions> sessions_;
     RetainedStore<Traits> retained_;
