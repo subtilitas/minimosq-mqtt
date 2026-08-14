@@ -1,0 +1,200 @@
+// Unit tests for the core layer: spans and fixed-capacity containers.
+// SPDX-License-Identifier: MIT
+#include "test.hpp"
+
+#include <minimosq/core/error.hpp>
+#include <minimosq/core/fixed_buffer.hpp>
+#include <minimosq/core/fixed_string.hpp>
+#include <minimosq/core/pool.hpp>
+#include <minimosq/core/span.hpp>
+#include <minimosq/core/static_vector.hpp>
+
+using namespace minimosq;
+
+// ---------------------------------------------------------------- spans
+
+TEST(bytespan_slice_and_equality) {
+    const uint8_t raw[] = {1, 2, 3, 4, 5};
+    ByteSpan s{raw, sizeof raw};
+
+    CHECK_EQ(s.len, 5u);
+    CHECK_EQ(s[0], 1);
+    CHECK(s.slice(1, 3) == ByteSpan(raw + 1, 3));
+    CHECK(s.slice(4, 100).len == 1);  // count clamped
+    CHECK(s.slice(9, 1).empty());     // offset out of range
+    CHECK(ByteSpan{} == ByteSpan{});
+    CHECK(s != s.slice(0, 4));
+}
+
+TEST(strview_literals_and_equality) {
+    StrView a = "topic/x";
+    CHECK_EQ(a.len, 7u);
+    CHECK(a == StrView("topic/x"));
+    CHECK(a != StrView("topic/y"));
+    CHECK(StrView("").empty());
+    CHECK(as_str(a.bytes()) == a);
+}
+
+TEST(err_names) {
+    CHECK(is_ok(Err::ok));
+    CHECK(!is_ok(Err::capacity));
+    CHECK(StrView(err_name(Err::malformed)) == StrView("malformed"));
+}
+
+// -------------------------------------------------------- StaticVector
+
+namespace {
+int live_probes = 0;
+struct Probe {
+    int value = 0;
+    Probe() { ++live_probes; }
+    Probe(const Probe& o) : value(o.value) { ++live_probes; }
+    Probe& operator=(const Probe&) = default;
+    ~Probe() { --live_probes; }
+};
+} // namespace
+
+TEST(static_vector_push_to_capacity) {
+    StaticVector<int, 3> v;
+    CHECK(v.empty());
+    CHECK(v.push_back(1));
+    CHECK(v.push_back(2));
+    CHECK(v.push_back(3));
+    CHECK(v.full());
+    CHECK(!v.push_back(4));  // full: rejected, size unchanged
+    CHECK_EQ(v.size(), 3u);
+    CHECK_EQ(v[0], 1);
+    CHECK_EQ(v[2], 3);
+    CHECK(v.emplace_back() == nullptr);
+}
+
+TEST(static_vector_ordered_removal_preserves_order) {
+    StaticVector<int, 5> v;
+    for (int i = 1; i <= 5; ++i) {
+        v.push_back(i);
+    }
+    v.remove_ordered(1);  // remove 2
+    CHECK_EQ(v.size(), 4u);
+    CHECK_EQ(v[0], 1);
+    CHECK_EQ(v[1], 3);
+    CHECK_EQ(v[2], 4);
+    CHECK_EQ(v[3], 5);
+    v.remove_ordered(3);  // remove last (5)
+    CHECK_EQ(v.size(), 3u);
+    CHECK_EQ(v[2], 4);
+}
+
+TEST(static_vector_unordered_removal) {
+    StaticVector<int, 4> v;
+    for (int i = 1; i <= 4; ++i) {
+        v.push_back(i);
+    }
+    v.remove_unordered(0);  // last element moves into slot 0
+    CHECK_EQ(v.size(), 3u);
+    CHECK_EQ(v[0], 4);
+}
+
+TEST(static_vector_runs_destructors) {
+    live_probes = 0;
+    {
+        StaticVector<Probe, 4> v;
+        v.push_back(Probe{});
+        v.push_back(Probe{});
+        v.push_back(Probe{});
+        CHECK_EQ(live_probes, 3);
+        v.remove_ordered(0);
+        CHECK_EQ(live_probes, 2);
+        v.clear();
+        CHECK_EQ(live_probes, 0);
+        v.push_back(Probe{});
+    }
+    CHECK_EQ(live_probes, 0);  // destructor drains remaining elements
+}
+
+// ---------------------------------------------------------------- Pool
+
+TEST(pool_alloc_release_reuse) {
+    Pool<int, 3> p;
+    int* a = p.alloc();
+    int* b = p.alloc();
+    int* c = p.alloc();
+    CHECK(a && b && c);
+    CHECK(p.full());
+    CHECK(p.alloc() == nullptr);
+
+    CHECK_EQ(p.index_of(b), 1u);
+    CHECK(p.at(1) == b);
+    p.release(b);
+    CHECK(p.at(1) == nullptr);
+    CHECK_EQ(p.size(), 2u);
+
+    int* d = p.alloc();  // first free slot is reused
+    CHECK(d == b);
+    CHECK_EQ(p.size(), 3u);
+}
+
+TEST(pool_for_each_with_release_during_iteration) {
+    Pool<int, 4> p;
+    for (int i = 0; i < 4; ++i) {
+        *p.alloc() = i;
+    }
+    // Release odd values from inside the visit.
+    p.for_each([&](int& v) {
+        if (v % 2 == 1) {
+            p.release(&v);
+        }
+    });
+    CHECK_EQ(p.size(), 2u);
+    int sum = 0;
+    p.for_each([&](int& v) { sum += v; });
+    CHECK_EQ(sum, 0 + 2);
+}
+
+TEST(pool_find) {
+    Pool<int, 4> p;
+    *p.alloc() = 10;
+    *p.alloc() = 20;
+    int* hit = p.find([](int v) { return v == 20; });
+    CHECK(hit != nullptr && *hit == 20);
+    CHECK(p.find([](int v) { return v == 99; }) == nullptr);
+}
+
+TEST(pool_runs_destructors) {
+    live_probes = 0;
+    {
+        Pool<Probe, 3> p;
+        Probe* a = p.alloc();
+        p.alloc();
+        CHECK_EQ(live_probes, 2);
+        p.release(a);
+        CHECK_EQ(live_probes, 1);
+    }
+    CHECK_EQ(live_probes, 0);
+}
+
+// ------------------------------------------- FixedString / FixedBuffer
+
+TEST(fixed_string_assign_and_reject) {
+    FixedString<8> s;
+    CHECK(s.assign("abc"));
+    CHECK(s.equals("abc"));
+    CHECK_EQ(s.size(), 3u);
+
+    CHECK(!s.assign("123456789"));  // 9 chars > capacity 8: rejected...
+    CHECK(s.equals("abc"));         // ...and previous value kept
+
+    CHECK(s.assign("12345678"));  // exactly at capacity
+    CHECK_EQ(s.size(), 8u);
+    s.clear();
+    CHECK(s.empty());
+}
+
+TEST(fixed_buffer_assign_and_reject) {
+    FixedBuffer<4> b;
+    const uint8_t four[] = {1, 2, 3, 4};
+    const uint8_t five[] = {1, 2, 3, 4, 5};
+    CHECK(b.assign(ByteSpan{four, 4}));
+    CHECK(b.view() == ByteSpan(four, 4));
+    CHECK(!b.assign(ByteSpan{five, 5}));
+    CHECK(b.view() == ByteSpan(four, 4));
+}

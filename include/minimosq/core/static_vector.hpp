@@ -1,0 +1,107 @@
+// minimosq — fixed-capacity vector.
+//
+// A drop-in replacement for the small subset of std::vector the broker
+// needs, backed entirely by in-object storage. Never allocates, never
+// throws: push_back/emplace_back report failure instead.
+//
+// SPDX-License-Identifier: MIT
+#ifndef MINIMOSQ_CORE_STATIC_VECTOR_HPP
+#define MINIMOSQ_CORE_STATIC_VECTOR_HPP
+
+#include <cstddef>
+#include <new>
+
+namespace minimosq {
+
+template <typename T, size_t Capacity>
+class StaticVector {
+    static_assert(Capacity > 0, "StaticVector needs a non-zero capacity");
+
+public:
+    StaticVector() = default;
+    ~StaticVector() { clear(); }
+
+    // Element storage is in-object; copying would be easy to add but the
+    // library never needs it, so it is disabled to prevent accidents.
+    StaticVector(const StaticVector&) = delete;
+    StaticVector& operator=(const StaticVector&) = delete;
+
+    size_t size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+    bool full() const noexcept { return size_ == Capacity; }
+    static constexpr size_t capacity() noexcept { return Capacity; }
+
+    T& operator[](size_t i) noexcept { return *ptr(i); }
+    const T& operator[](size_t i) const noexcept { return *ptr(i); }
+
+    T* begin() noexcept { return ptr(0); }
+    T* end() noexcept { return ptr(0) + size_; }
+    const T* begin() const noexcept { return ptr(0); }
+    const T* end() const noexcept { return ptr(0) + size_; }
+
+    // Copy v into the next free slot. Returns false when full.
+    bool push_back(const T& v) noexcept {
+        if (size_ == Capacity) {
+            return false;
+        }
+        new (slot(size_)) T(v);
+        ++size_;
+        return true;
+    }
+
+    // Default-construct in the next free slot and return it; nullptr when full.
+    T* emplace_back() noexcept {
+        if (size_ == Capacity) {
+            return nullptr;
+        }
+        T* p = new (slot(size_)) T();
+        ++size_;
+        return p;
+    }
+
+    // Remove element i, shifting the tail left. Preserves relative order —
+    // the broker relies on this for in-order message delivery.
+    void remove_ordered(size_t i) noexcept {
+        for (size_t j = i; j + 1 < size_; ++j) {
+            *ptr(j) = static_cast<T&&>(*ptr(j + 1));
+        }
+        pop_back();
+    }
+
+    // Remove element i by moving the last element into its place. O(1),
+    // does not preserve order.
+    void remove_unordered(size_t i) noexcept {
+        if (i + 1 < size_) {
+            *ptr(i) = static_cast<T&&>(*ptr(size_ - 1));
+        }
+        pop_back();
+    }
+
+    void pop_back() noexcept {
+        ptr(size_ - 1)->~T();
+        --size_;
+    }
+
+    void clear() noexcept {
+        while (size_ > 0) {
+            pop_back();
+        }
+    }
+
+private:
+    void* slot(size_t i) noexcept { return storage_ + i * sizeof(T); }
+
+    T* ptr(size_t i) noexcept {
+        return std::launder(reinterpret_cast<T*>(storage_ + i * sizeof(T)));
+    }
+    const T* ptr(size_t i) const noexcept {
+        return std::launder(reinterpret_cast<const T*>(storage_ + i * sizeof(T)));
+    }
+
+    alignas(T) unsigned char storage_[Capacity * sizeof(T)];
+    size_t size_ = 0;
+};
+
+} // namespace minimosq
+
+#endif // MINIMOSQ_CORE_STATIC_VECTOR_HPP

@@ -6,3 +6,4 @@ function(minimosq_add_test name)
 endfunction()
 
 minimosq_add_test(test_harness)
+minimosq_add_test(test_core)
