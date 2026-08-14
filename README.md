@@ -1,5 +1,7 @@
 # minimosq
 
+[![CI](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml/badge.svg)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml)
+
 A small MQTT 3.1.1 broker as a **header-only C++17 template library**
 for embedded use:
 
