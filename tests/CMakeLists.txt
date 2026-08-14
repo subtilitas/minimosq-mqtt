@@ -7,3 +7,4 @@ endfunction()
 
 minimosq_add_test(test_harness)
 minimosq_add_test(test_core)
+minimosq_add_test(test_protocol_io)
