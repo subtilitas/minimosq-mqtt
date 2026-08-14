@@ -122,6 +122,75 @@ inline bool topic_matches(StrView filter, StrView name) {
     }
 }
 
+// Filter subsumption: does `cover` (a topic filter used as an ACL
+// pattern) match every topic name that `filter` matches? Used to
+// decide whether a subscription request stays inside a permitted
+// subtree, e.g. cover "home/#" covers filter "home/+/temp" but
+// "home/+" does not cover "home/#".
+inline bool topic_filter_covers(StrView cover, StrView filter) {
+    // A filter for $-topics can only be covered by a cover that also
+    // names the '$' level literally (wildcards never match it).
+    if (!filter.empty() && filter[0] == '$' && !cover.empty() &&
+        (cover[0] == '+' || cover[0] == '#')) {
+        return false;
+    }
+
+    size_t ci = 0;             // start of the current cover level
+    size_t fi = 0;             // start of the current filter level
+    bool filter_active = true; // filter still contributes a current level
+
+    while (true) {
+        size_t ce = ci;
+        while (ce < cover.len && cover[ce] != '/') {
+            ++ce;
+        }
+        if (ce == ci + 1 && cover[ci] == '#') {
+            return true;  // '#' covers this level and everything below
+        }
+        if (!filter_active) {
+            return false;  // cover expects another level, filter is done
+        }
+
+        size_t fe = fi;
+        while (fe < filter.len && filter[fe] != '/') {
+            ++fe;
+        }
+        const bool c_plus = (ce == ci + 1 && cover[ci] == '+');
+        const bool f_hash = (fe == fi + 1 && filter[fi] == '#');
+        const bool f_plus = (fe == fi + 1 && filter[fi] == '+');
+
+        if (f_hash) {
+            return false;  // only '#' covers '#', and that returned above
+        }
+        if (f_plus && !c_plus) {
+            return false;  // '+' matches every level; a literal cannot cover it
+        }
+        if (!f_plus && !c_plus) {
+            if (fe - fi != ce - ci) {
+                return false;
+            }
+            for (size_t k = 0; k < fe - fi; ++k) {
+                if (cover[ci + k] != filter[fi + k]) {
+                    return false;
+                }
+            }
+        }
+        // c_plus covering a literal or '+' level: fine either way.
+
+        const bool c_more = ce < cover.len;
+        const bool f_more = fe < filter.len;
+        if (!c_more) {
+            return !f_more;  // both must end together
+        }
+        ci = ce + 1;
+        if (f_more) {
+            fi = fe + 1;
+        } else {
+            filter_active = false;  // e.g. cover "a/#" vs filter "a"
+        }
+    }
+}
+
 } // namespace minimosq
 
 #endif // MINIMOSQ_TOPIC_HPP

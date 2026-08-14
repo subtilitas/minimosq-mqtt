@@ -79,6 +79,44 @@ the tail of each entry point tears connections down until quiescence.
 - Each session receives a message once, at min(publish QoS, max
   granted QoS across its matching subscriptions).
 
+## Security
+
+Security is layered, and each layer is a policy the embedder controls:
+
+1. **Transport security** — TLS slots in below the broker via the
+   adapter seam (`docs/tls.md`); the unix-socket transport offers
+   OS-level isolation for local-only deployments.
+2. **Authentication** — `Security::authenticate()` runs once per
+   CONNECT with client id, username and password, and answers with a
+   CONNACK code. On success it fills a policy-defined `Context` (a
+   role id, a permission bitmask — any trivially copyable type) that
+   the session stores. It is refreshed on every reconnect.
+3. **Authorization** — three hooks receive that context, so checks
+   never re-derive identity:
+   - `authorize_publish(ctx, topic)`: a denied PUBLISH is silently
+     discarded but still acknowledged — 3.1.1 has no error ack, and
+     silence avoids leaking topic existence [MQTT-3.3.5-2]. Wills go
+     through the same check when they fire.
+   - `authorize_subscribe(ctx, filter)`: denied entries answer
+     SUBACK 0x80 and install nothing.
+   - `authorize_receive(ctx, topic)`: checked on every delivery (live,
+     retained, queued), so even a broadly-subscribed client only
+     receives what it is cleared for.
+
+`AllowAllSecurity` (the default) passes everything. `TableAcl`
+(broker/table_acl.hpp) is a ready-made deny-by-default policy: a user
+table mapping credentials to roles, and a rule table granting roles
+read/write access to topic patterns. Subscription requests are checked
+by *filter subsumption* (`topic_filter_covers`): the requested filter
+must lie entirely inside a granted pattern. Passwords are compared in
+constant time but stored/transmitted in plain text (that is MQTT
+3.1.1) — run TLS underneath and swap in a hashed comparison as your
+threat model requires.
+
+The remaining pillar is resource protection, built in throughout:
+CONNECT-handshake timeouts, bounded packet sizes, slow-consumer
+drops, and every table having a fixed, tunable capacity.
+
 ## Documented policy decisions (spec-permitted or capacity-driven)
 
 | Situation | Behaviour |
