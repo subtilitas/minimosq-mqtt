@@ -27,7 +27,9 @@ enum class OutState : unsigned char {
     awaiting_pubcomp,  // PUBREC received, PUBREL sent
 };
 
-template <typename Traits>
+// AuthCtx is the security policy's per-session Context: the "principal"
+// produced by authentication, consulted by every authorization check.
+template <typename Traits, typename AuthCtx>
 struct Session {
     struct Subscription {
         FixedString<Traits::max_topic_len> filter;
@@ -71,6 +73,9 @@ struct Session {
 
     bool clean_session = true;
     uint16_t conn = no_conn;  // connection index while connected
+
+    // Refreshed by authenticate() on every (re)connect.
+    AuthCtx auth_ctx{};
 
     bool connected() const noexcept { return conn != no_conn; }
 

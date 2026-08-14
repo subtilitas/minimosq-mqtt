@@ -96,14 +96,14 @@ TEST(session_slots_exhausted) {
 }
 
 namespace {
-struct RecordingAuth {
+struct RecordingSecurity : minimosq::AllowAllSecurity {
     char seen_user[32] = {};
     char seen_pass[32] = {};
     bool had_user = false;
     bool had_pass = false;
 
-    minimosq::ConnackCode check(minimosq::StrView, const minimosq::StrView* username,
-                                const minimosq::ByteSpan* password) {
+    minimosq::ConnackCode authenticate(minimosq::StrView, const minimosq::StrView* username,
+                                       const minimosq::ByteSpan* password, Context&) {
         had_user = username != nullptr;
         had_pass = password != nullptr;
         if (username != nullptr) {
@@ -128,14 +128,14 @@ struct RecordingAuth {
 } // namespace
 
 TEST(auth_policy_is_consulted) {
-    BedT<RecordingAuth> x;
+    BedT<RecordingSecurity> x;
     wire::ConnectOpts o;
     o.username = "bob";
     o.password = "secret";
     x.connect(0, "c1", o);
     expect_connack(x.t, 0, false, ConnackCode::accepted);
-    CHECK(x.b.auth().had_user);
-    CHECK(x.b.auth().had_pass);
+    CHECK(x.b.security().had_user);
+    CHECK(x.b.security().had_pass);
 
     wire::ConnectOpts bad;
     bad.username = "bob";

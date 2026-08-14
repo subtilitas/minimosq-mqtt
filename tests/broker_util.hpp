@@ -92,11 +92,11 @@ struct CaptureTransport {
 };
 
 // A broker wired to a capture transport, plus driving helpers.
-template <typename Auth = AllowAllAuth>
+template <typename Security = AllowAllSecurity>
 struct BedT {
     using Transport = CaptureTransport<SmallTraits::max_connections>;
     Transport t;
-    Broker<SmallTraits, Transport, Auth> b{t};
+    Broker<SmallTraits, Transport, Security> b{t};
     uint32_t now = 1000;
 
     void open(size_t c) { CHECK(b.conn_open(c, now) == Err::ok); }
