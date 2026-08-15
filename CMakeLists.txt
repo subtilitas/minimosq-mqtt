@@ -42,4 +42,12 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     if(MINIMOSQ_BUILD_EXAMPLES AND UNIX)
         add_subdirectory(examples)
     endif()
+
+    # Host-side tools (documentation build).
+    option(MINIMOSQ_BUILD_TOOLS "Build the developer tools" ON)
+    if(MINIMOSQ_BUILD_TOOLS)
+        add_executable(minimosq_footprint tools/footprint.cpp)
+        target_link_libraries(minimosq_footprint
+            PRIVATE minimosq::minimosq minimosq_build_flags)
+    endif()
 endif()

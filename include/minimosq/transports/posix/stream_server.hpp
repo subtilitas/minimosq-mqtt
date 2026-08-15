@@ -26,6 +26,14 @@
 
 namespace minimosq {
 
+// Not every stack defines MSG_NOSIGNAL — lwIP (ESP-IDF, Zephyr) has no
+// SIGPIPE to suppress in the first place.
+#ifdef MSG_NOSIGNAL
+constexpr int stream_send_flags = MSG_NOSIGNAL;
+#else
+constexpr int stream_send_flags = 0;
+#endif
+
 template <size_t MaxConns, size_t OutBufSize = 4096>
 class StreamServerTransport {
 public:
@@ -220,7 +228,7 @@ private:
         Slot& s = slots_[ci];
         while (s.fd >= 0 && !s.ring.empty()) {
             const ByteSpan chunk = s.ring.front_chunk();
-            const ssize_t w = ::send(s.fd, chunk.data, chunk.len, MSG_NOSIGNAL);
+            const ssize_t w = ::send(s.fd, chunk.data, chunk.len, stream_send_flags);
             if (w > 0) {
                 s.ring.consume(static_cast<size_t>(w));
                 continue;

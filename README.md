@@ -133,6 +133,18 @@ mosquitto_sub -p 1883 -q 1 -t 'demo/#' -v &
 mosquitto_pub -p 1883 -q 2 -t demo/hello -m 'hi' -r
 ```
 
+## Documentation
+
+Full documentation lives in the
+[wiki](https://github.com/subtilitas/minimosq-mqtt/wiki), which CI
+regenerates from this repository on every push to `main` — including a
+[configuration reference](https://github.com/subtilitas/minimosq-mqtt/wiki/Configuration)
+with measured footprints, an
+[API reference](https://github.com/subtilitas/minimosq-mqtt/wiki/API-Reference),
+and a [porting guide](https://github.com/subtilitas/minimosq-mqtt/wiki/Porting)
+(ESP32, bare metal, other targets). The sources are the Markdown files
+under `docs/`; edit those, never the wiki.
+
 ## Design, conformance and policies
 
 [docs/design.md](docs/design.md) covers the layering, the memory and

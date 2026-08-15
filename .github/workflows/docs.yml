@@ -1,0 +1,79 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Pushing to the repository's wiki needs write access to repository
+# contents. If your organisation restricts GITHUB_TOKEN, create a PAT
+# with repo scope and store it as the WIKI_TOKEN secret instead.
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wiki:
+    name: build & publish wiki
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Measure the broker footprint
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                -DMINIMOSQ_BUILD_TESTS=OFF -DMINIMOSQ_BUILD_EXAMPLES=OFF
+          cmake --build build --target minimosq_footprint -j"$(nproc)"
+          ./build/minimosq_footprint | tee build/footprint.tsv
+
+      - name: Generate the wiki
+        run: |
+          python3 tools/gen_docs.py \
+            --out build/wiki \
+            --footprint build/footprint.tsv \
+            --repo-url "${{ github.server_url }}/${{ github.repository }}" \
+            --commit "${{ github.sha }}" \
+            --check
+
+      - name: Upload as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wiki
+          path: build/wiki
+
+      # Publishing only happens for main; pull requests stop at the
+      # build, so a broken generator fails review instead of the wiki.
+      - name: Publish to the GitHub wiki
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.WIKI_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          WIKI_URL="https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.wiki.git"
+          if ! git clone --depth 1 "$WIKI_URL" build/wiki-repo 2>clone.log; then
+            sed 's|https://[^@]*@|https://|g' clone.log >&2
+            echo "::error::Could not clone the wiki. A wiki must be created once" \
+                 "by hand before CI can push to it: open the repository's Wiki tab" \
+                 "and save any page, then re-run this workflow."
+            exit 1
+          fi
+
+          # Replace the generated pages, leaving any hand-made page in place.
+          cd build/wiki-repo
+          rm -f ./*.md
+          cp ../wiki/*.md .
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git commit -m "docs: sync wiki from ${GITHUB_SHA::7}"
+          git push
+          echo "Wiki updated: ${{ github.server_url }}/${{ github.repository }}/wiki"
