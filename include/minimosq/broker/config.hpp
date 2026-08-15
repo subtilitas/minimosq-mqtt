@@ -27,11 +27,15 @@ struct DefaultTraits {
     // sessions. Must be >= max_connections to accept every connection.
     static constexpr size_t max_sessions = 8;
 
+    // Topic filters one session may hold. A SUBSCRIBE beyond this
+    // answers 0x80 for the excess entries.
     static constexpr size_t max_subscriptions_per_session = 8;
 
     // Longest accepted topic name / topic filter, in bytes.
     static constexpr size_t max_topic_len = 128;
 
+    // Longest accepted client identifier, in bytes. Longer ids are
+    // refused with CONNACK 0x02. The spec only requires 23.
     static constexpr size_t max_client_id_len = 64;
 
     // Largest accepted inbound packet body (variable header + payload).
@@ -43,6 +47,8 @@ struct DefaultTraits {
     // delivery is bounded by max_packet_size instead.
     static constexpr size_t max_payload_len = 512;
 
+    // Retained messages held, one per topic. A full store is a
+    // best-effort miss: the message is still delivered live.
     static constexpr size_t max_retained = 16;
 
     // Per-session outbound queue: in-flight QoS 1/2 messages plus
