@@ -126,12 +126,14 @@ inline Err parse_publish(uint8_t first_byte, ByteSpan body, PublishPacket& out) 
     out.topic = r.utf8();
     if (out.qos != QoS::at_most_once) {
         out.packet_id = r.u16();
-        if (out.packet_id == 0) {
-            return Err::malformed;  // [MQTT-2.3.1-1]
-        }
     }
+    // Truncation is checked first: a short read yields a zero packet id,
+    // which would otherwise be misreported as malformed.
     if (!r.ok()) {
         return Err::truncated;
+    }
+    if (out.qos != QoS::at_most_once && out.packet_id == 0) {
+        return Err::malformed;  // [MQTT-2.3.1-1]
     }
     out.payload = r.rest();
     return Err::ok;
@@ -223,13 +225,21 @@ constexpr size_t packet_overhead = 5;
 
 // Frame a body that was written at buf + packet_overhead: places the
 // fixed header directly before the body so the packet is contiguous.
-// Returns the full packet span.
+// Returns the full packet span, or an empty span when body_len exceeds
+// what a Remaining Length varint can express — returning the span
+// regardless would describe bytes that were never written.
 inline ByteSpan frame_packet(uint8_t* buf, uint8_t first_byte, size_t body_len) {
+    if (body_len > max_remaining_length) {
+        return ByteSpan{};
+    }
     const size_t vs = varint_size(static_cast<uint32_t>(body_len));
     const size_t start = packet_overhead - 1 - vs;
     Writer w{buf + start, 1 + vs};
     w.u8(first_byte);
     w.varint(static_cast<uint32_t>(body_len));
+    if (!w.ok()) {
+        return ByteSpan{};
+    }
     return ByteSpan{buf + start, 1 + vs + body_len};
 }
 
@@ -240,6 +250,9 @@ inline ByteSpan build_connack(uint8_t* buf, size_t cap, bool session_present, Co
     Writer w{buf + packet_overhead, cap - packet_overhead};
     w.u8(session_present ? 0x01 : 0x00);
     w.u8(static_cast<uint8_t>(code));
+    if (!w.ok()) {
+        return ByteSpan{};
+    }
     return frame_packet(buf, make_first_byte(PacketType::connack, 0), w.size());
 }
 
@@ -276,6 +289,9 @@ inline ByteSpan build_packet_id_only(uint8_t* buf, size_t cap, PacketType type,
     }
     Writer w{buf + packet_overhead, cap - packet_overhead};
     w.u16(packet_id);
+    if (!w.ok()) {
+        return ByteSpan{};
+    }
     const uint8_t flags = (type == PacketType::pubrel) ? 0x02 : 0x00;
     return frame_packet(buf, make_first_byte(type, flags), w.size());
 }

@@ -267,3 +267,46 @@ TEST(build_pingresp_bytes) {
     const uint8_t expect[] = {0xD0, 0x00};
     CHECK(pkt == ByteSpan(expect, 2));
 }
+
+// --------------------------------------------- post-review regressions
+
+TEST(parse_publish_truncated_is_truncated_not_malformed) {
+    // QoS 1 PUBLISH that ends right after the topic: the packet id is
+    // missing, so the short read must be reported as truncation rather
+    // than as the "packet id 0" malformation it looks like.
+    uint8_t body[16];
+    Writer w{body, sizeof body};
+    w.utf8("a/b");
+    PublishPacket p;
+    const uint8_t fb = make_first_byte(PacketType::publish, 0x02);
+    CHECK(parse_publish(fb, ByteSpan{body, w.size()}, p) == Err::truncated);
+
+    // A genuinely zero packet id is still malformed.
+    Writer w2{body, sizeof body};
+    w2.utf8("a/b");
+    w2.u16(0);
+    CHECK(parse_publish(fb, ByteSpan{body, w2.size()}, p) == Err::malformed);
+}
+
+TEST(frame_packet_rejects_a_body_it_cannot_describe) {
+    // varint() refuses anything above the Remaining Length maximum and
+    // writes nothing; frame_packet must not hand back a span describing
+    // bytes that were never written.
+    uint8_t buf[64] = {0};
+    CHECK(frame_packet(buf, make_first_byte(PacketType::publish, 0),
+                       max_remaining_length + 1)
+              .empty());
+
+    // The largest expressible body is still accepted.
+    const ByteSpan ok = frame_packet(buf, make_first_byte(PacketType::publish, 0),
+                                     max_remaining_length);
+    CHECK(!ok.empty());
+    CHECK_EQ(ok.len, 1u + 4u + max_remaining_length);
+}
+
+TEST(builders_reject_a_buffer_that_is_too_small) {
+    uint8_t buf[packet_overhead + 1];  // one byte short of a 2-byte body
+    CHECK(build_connack(buf, sizeof buf, false, ConnackCode::accepted).empty());
+    CHECK(build_packet_id_only(buf, sizeof buf, PacketType::puback, 1).empty());
+    CHECK(build_pingresp(buf, 1).empty());
+}
