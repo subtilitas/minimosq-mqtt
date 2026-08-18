@@ -6,3 +6,6 @@ cmake-build-*/
 # Tooling caches
 .cache/
 compile_commands.json
+
+# Scratch area for files pulled out of the tree (stale locks, old patches)
+_to_delete/

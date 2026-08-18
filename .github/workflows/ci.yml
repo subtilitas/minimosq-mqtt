@@ -14,7 +14,7 @@ jobs:
       matrix:
         compiler: [g++, clang++]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Configure
         run: >
@@ -39,7 +39,7 @@ jobs:
     name: ASan + UBSan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Configure
         run: >
@@ -54,11 +54,53 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
 
+  # The library is all size_t arithmetic over fixed arrays, so a 32-bit
+  # target is where an assumption that size_t is 64 bits would show up.
+  build-test-32bit:
+    name: build & test (32-bit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install 32-bit toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-multilib
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DMINIMOSQ_WERROR=ON
+          -DCMAKE_CXX_FLAGS=-m32
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  # CMakeLists.txt carries an MSVC branch (/W4 /WX); without a job it is
+  # never exercised. The POSIX transports and their tests are excluded
+  # by the UNIX guards, so this covers the portable core.
+  build-test-msvc:
+    name: build & test (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: cmake -B build -DMINIMOSQ_WERROR=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Run tests
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
   smoke:
     name: mosquitto smoke test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install mosquitto clients
         run: sudo apt-get update && sudo apt-get install -y mosquitto-clients

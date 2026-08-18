@@ -1,0 +1,188 @@
+name: Release
+
+# Tagging a version publishes a GitHub Release. The full test matrix runs
+# first: a tag that does not build never becomes a release.
+#
+#   git tag -a v0.1.0 -m 'minimosq 0.1.0' && git push origin v0.1.0
+#
+# Re-running the workflow for an existing tag updates the release in place.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build a release from (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Same gates as CI, but pinned to the tagged tree. Kept separate from
+  # ci.yml so a release can never depend on a stale run.
+  verify:
+    name: verify (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+          -DCMAKE_BUILD_TYPE=Release
+          -DMINIMOSQ_WERROR=ON
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  sanitize:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DMINIMOSQ_WERROR=ON
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  publish:
+    name: publish release
+    needs: [verify, sanitize]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0  # tag history, for the changelog range
+
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -eu
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # v0.1.0-rc1 -> 0.1.0, so a pre-release still matches the
+          # numeric version in CMakeLists.txt.
+          echo "core=${VERSION%%-*}" >> "$GITHUB_OUTPUT"
+
+      # The version in CMakeLists.txt is what consumers see through
+      # find_package, so a tag that disagrees with it is a packaging bug.
+      - name: Check the tag matches project(VERSION ...)
+        run: |
+          set -eu
+          CMAKE_VERSION="$(sed -n 's/^project(minimosq VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          TAG_CORE="${{ steps.tag.outputs.core }}"
+          if [ "$CMAKE_VERSION" != "$TAG_CORE" ]; then
+            echo "::error::Tag ${{ steps.tag.outputs.tag }} does not match" \
+                 "project(minimosq VERSION $CMAKE_VERSION) in CMakeLists.txt."
+            exit 1
+          fi
+          echo "Version $TAG_CORE matches CMakeLists.txt."
+
+      # minimosq is header-only, so the useful artifact is the headers on
+      # their own — for consumers who vendor them instead of using CMake.
+      - name: Package the headers
+        run: |
+          set -eu
+          NAME="minimosq-${{ steps.tag.outputs.version }}-headers"
+          mkdir -p "dist/$NAME"
+          cp -r include "dist/$NAME/"
+          cp LICENSE README.md "dist/$NAME/"
+          tar -czf "dist/$NAME.tar.gz" -C dist "$NAME"
+          (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+          ls -l dist
+
+      - name: Build the changelog
+        id: changelog
+        run: |
+          set -eu
+          TAG="${{ steps.tag.outputs.tag }}"
+          PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
+          {
+            echo "## What changed"
+            echo
+            if [ -n "$PREV" ]; then
+              git log --no-merges --pretty='- %s (%h)' "$PREV..$TAG"
+            else
+              git log --no-merges --pretty='- %s (%h)' "$TAG"
+            fi
+            echo
+            echo "## Verified by"
+            echo
+            echo "- GCC and Clang, \`-Werror\`, full test suite"
+            echo "- AddressSanitizer + UndefinedBehaviorSanitizer, full test suite"
+            echo
+            echo "## Using it"
+            echo
+            echo '```cmake'
+            echo "FetchContent_Declare(minimosq"
+            echo "  GIT_REPOSITORY ${{ github.server_url }}/${{ github.repository }}.git"
+            echo "  GIT_TAG $TAG)"
+            echo '```'
+            echo
+            echo "Or vendor the headers directly from the attached tarball —"
+            echo "minimosq is header-only and needs only an include path."
+            if [ -n "$PREV" ]; then
+              echo
+              echo "**Full diff**: ${{ github.server_url }}/${{ github.repository }}/compare/$PREV...$TAG"
+            fi
+          } > CHANGELOG_RELEASE.md
+          cat CHANGELOG_RELEASE.md
+
+      - name: Upload the release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: minimosq-${{ steps.tag.outputs.version }}-headers
+          path: dist/
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG="${{ steps.tag.outputs.tag }}"
+          # A pre-release tag (v0.1.0-rc1) is published as a pre-release.
+          PRERELEASE=""
+          case "$TAG" in *-*) PRERELEASE="--prerelease";; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "minimosq $TAG" \
+              --notes-file CHANGELOG_RELEASE.md \
+              $PRERELEASE
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "minimosq $TAG" \
+              --notes-file CHANGELOG_RELEASE.md \
+              $PRERELEASE
+          fi
+          echo "Released: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG"

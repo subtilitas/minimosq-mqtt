@@ -21,7 +21,7 @@ jobs:
     name: build & publish wiki
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Measure the broker footprint
         run: |
@@ -40,7 +40,7 @@ jobs:
             --check
 
       - name: Upload as an artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wiki
           path: build/wiki
@@ -62,9 +62,12 @@ jobs:
             exit 1
           fi
 
-          # Replace the generated pages, leaving any hand-made page in place.
+          # Replace only the pages this generator owns, so a page written
+          # by hand in the wiki UI survives the sync.
           cd build/wiki-repo
-          rm -f ./*.md
+          for page in ../wiki/*.md; do
+            rm -f "./$(basename "$page")"
+          done
           cp ../wiki/*.md .
 
           git config user.name "github-actions[bot]"

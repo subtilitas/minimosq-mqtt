@@ -15,11 +15,28 @@ PORT="${2:-18883}"
 WORKDIR="$(mktemp -d)"
 BROKER_PID=""
 SUB_PID=""
+VICTIM_PID=""
 
 cleanup() {
     [ -n "$SUB_PID" ] && kill "$SUB_PID" 2>/dev/null || true
+    [ -n "$VICTIM_PID" ] && kill "$VICTIM_PID" 2>/dev/null || true
     [ -n "$BROKER_PID" ] && kill "$BROKER_PID" 2>/dev/null || true
     rm -rf "$WORKDIR"
+}
+
+# Wait until a subscriber has actually connected before publishing to it.
+# Sleeping a fixed amount instead is the classic way to get a test that
+# passes locally and flakes on a loaded CI runner.
+wait_for_subscription() {
+    marker="$1"
+    for _ in $(seq 1 100); do
+        mosquitto_pub -p "$PORT" -t "$marker" -m probe 2>/dev/null || true
+        if [ -s "$WORKDIR/ready.out" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
 }
 trap cleanup EXIT INT TERM
 
@@ -62,14 +79,27 @@ out="$(mosquitto_sub -p "$PORT" -t smoke/retained -C 1 -W 10)"
 echo "ok: retained delivery"
 
 # --- 3. Will fires when a client dies abruptly -----------------------
+rm -f "$WORKDIR/ready.out"
+mosquitto_sub -p "$PORT" -t 'smoke/ready2' -C 1 -W 10 > "$WORKDIR/ready.out" &
+READY_PID=$!
 mosquitto_sub -p "$PORT" -t 'smoke/will' -C 1 -W 10 > "$WORKDIR/will.out" &
 SUB_PID=$!
-sleep 0.5
+wait_for_subscription smoke/ready2 || fail "will subscriber never connected"
+wait "$READY_PID" 2>/dev/null || true
+
+# The victim must be fully connected before it is killed, or there is no
+# session for the broker to fire a will from.
+rm -f "$WORKDIR/ready.out"
+mosquitto_sub -p "$PORT" -t 'smoke/ready3' -C 1 -W 10 > "$WORKDIR/ready.out" &
+READY_PID=$!
 mosquitto_sub -p "$PORT" -t 'smoke/nothing' \
     --will-topic smoke/will --will-payload 'client-died' --will-qos 1 &
 VICTIM_PID=$!
-sleep 0.5
+wait_for_subscription smoke/ready3 || fail "will victim never connected"
+wait "$READY_PID" 2>/dev/null || true
+
 kill -9 "$VICTIM_PID"
+VICTIM_PID=""
 wait "$SUB_PID" || fail "will subscriber timed out"
 SUB_PID=""
 [ "$(cat "$WORKDIR/will.out")" = "client-died" ] || fail "will payload mismatch"
