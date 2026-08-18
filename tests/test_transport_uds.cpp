@@ -9,6 +9,7 @@
 #include <csignal>
 #include <cstdio>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -118,4 +119,35 @@ TEST(uds_end_to_end_pubsub) {
     for (int i = 0; i < 10; ++i) {
         t.poll_once(b, 5);
     }
+}
+
+// ------------------------------------------- post-review regressions
+
+TEST(uds_socket_is_created_with_restrictive_permissions) {
+    char path[64];
+    std::snprintf(path, sizeof path, "/tmp/minimosq-perm-%d.sock", static_cast<int>(::getpid()));
+    ::unlink(path);
+
+    Transport t;
+    CHECK(t.open(path));
+
+    struct stat st{};
+    CHECK_EQ(::stat(path, &st), 0);
+    // Default 0600: nothing for group or other. The whole security
+    // story of this transport is filesystem permissions, so inheriting
+    // a permissive umask would quietly undo it.
+    CHECK_EQ(static_cast<int>(st.st_mode & 0777), 0600);
+}
+
+TEST(uds_socket_mode_is_configurable) {
+    char path[64];
+    std::snprintf(path, sizeof path, "/tmp/minimosq-perm2-%d.sock", static_cast<int>(::getpid()));
+    ::unlink(path);
+
+    Transport t;
+    CHECK(t.open(path, 0660));
+
+    struct stat st{};
+    CHECK_EQ(::stat(path, &st), 0);
+    CHECK_EQ(static_cast<int>(st.st_mode & 0777), 0660);
 }

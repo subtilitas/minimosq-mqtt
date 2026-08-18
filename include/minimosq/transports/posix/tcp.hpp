@@ -12,6 +12,7 @@
 
 #include <cstring>
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -25,7 +26,12 @@ class TcpTransport : public StreamServerTransport<MaxConns, OutBufSize> {
 public:
     // Listen on all interfaces. Pass port 0 to let the OS pick one
     // (see port() afterwards — handy for tests).
-    bool open(uint16_t port) {
+    //
+    // bind_addr restricts the listening interface: "127.0.0.1" keeps a
+    // plaintext broker off the network entirely, which is the right
+    // default for anything not fronted by TLS. nullptr means all
+    // interfaces.
+    bool open(uint16_t port, const char* bind_addr = nullptr) {
         const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) {
             return false;
@@ -36,6 +42,10 @@ public:
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = INADDR_ANY;
+        if (bind_addr != nullptr && ::inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
+            ::close(fd);
+            return false;  // unparseable address: fail loudly, never fall back to ANY
+        }
         addr.sin_port = htons(port);
         if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0 ||
             ::listen(fd, 8) != 0 || !set_nonblocking(fd)) {
