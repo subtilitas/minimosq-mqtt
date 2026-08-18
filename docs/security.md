@@ -3,7 +3,11 @@
 Security in minimosq is layered, and every layer is a policy you control:
 
 1. **Transport security** — TLS below the broker via the adapter seam
-   ([TLS](TLS)), or OS-level isolation with the unix-socket transport.
+   ([TLS](TLS)), or OS-level isolation with the unix-socket transport
+   (whose socket file is created `0600` by default; pass a wider mode to
+   `open()` deliberately if clients run as other users). The TCP
+   transport takes an optional bind address, so `open(1883, "127.0.0.1")`
+   keeps a plaintext broker off the network entirely.
 2. **Authentication** — who is connecting.
 3. **Authorization** — what they may publish, subscribe to, and receive.
 4. **Resource protection** — bounded everything, so a hostile or broken
@@ -50,7 +54,7 @@ Each hook has a deny behaviour chosen to be MQTT 3.1.1-conformant:
 | Hook | On denial |
 | --- | --- |
 | `authorize_publish` | Message silently discarded, but still acknowledged (PUBACK / the full PUBREC-PUBREL-PUBCOMP handshake). 3.1.1 has no "not authorized" acknowledgement, and silence avoids leaking which topics exist. Retained storage is skipped too. |
-| `authorize_subscribe` | `SUBACK` returns `0x80` for that entry and no subscription is installed. Other entries in the same packet are unaffected. |
+| `authorize_subscribe` | `SUBACK` returns `0x80` for that entry and no subscription is installed. Other entries in the same packet are unaffected. A refusal also suppresses the retained replay for that entry — including when the session still holds an identical subscription granted before the policy changed. |
 | `authorize_receive` | That subscriber is skipped for that message — live routing, retained delivery on subscribe, and offline queueing alike. |
 
 Wills pass through `authorize_publish` when they fire, so a client cannot
@@ -91,9 +95,15 @@ Behaviour worth knowing:
 * **Anonymous clients are refused** (`not_authorized`) unless you call
   `allow_anonymous(role)`.
 * **Unknown username and wrong password are indistinguishable** — both
-  answer `bad_credentials`, so the broker is not a user-enumeration
-  oracle.
-* **Passwords are compared in constant time.**
+  answer `bad_credentials`. The lookup also scans the whole user table
+  and compares every stored password whether or not the name matched, so
+  the two cases take the same work and the answer is not a
+  user-enumeration oracle by timing either.
+* **Passwords are compared in constant time.** The comparison has no
+  data-dependent early exit; a *length* difference is still observable,
+  which for passwords is an accepted trade.
+* **Duplicate usernames are rejected** by `add_user` rather than
+  silently shadowed, so a config typo fails loudly at startup.
 * **Subscriptions are checked by filter subsumption**: the requested
   filter must lie entirely within a granted pattern. A client cleared for
   `home/#` cannot subscribe to `#`. (`topic_filter_covers()` in
@@ -135,9 +145,36 @@ These are always on, and tuned through the traits:
 | `connect_timeout_ms` | A connection that does not complete CONNECT is dropped |
 | `max_packet_size` | Larger inbound packets close the connection instead of being buffered |
 | Keep-alive | Idle clients are dropped after 1.5 keep-alive periods |
+| `max_idle_ms` | Reclaims clients that connected with keep-alive 0; see below |
 | Transport output buffer | A client that will not drain its socket is dropped rather than stalling the broker |
+| Transport read budget | One connection is drained at most `max_reads_per_pass` times per poll, so a chatty peer cannot starve the others or stall `tick()` |
 | `max_sessions`, `max_retained`, `max_pending_per_session`, `max_inbound_qos2` | Fixed tables; a full table is refused cleanly (see the policy table in [Design notes](Design-Notes)) |
 
 Because nothing is allocated at runtime, there is no fragmentation and no
 out-of-memory path: the worst case is a refused connection or a dropped
 message, both of which are documented behaviours.
+
+### Idle clients and `max_idle_ms`
+
+Be precise about what the fixed tables buy you: they bound how much
+memory a client can cost, **not** how long it can occupy a slot. MQTT
+defines keep-alive 0 as "never time out", so a client that connects with
+keep-alive 0 and then says nothing holds its connection *and* its session
+slot indefinitely. With `max_connections` in the single digits — the
+normal case for an embedded broker — a handful of such clients is all it
+takes to make the broker answer `CONNACK 0x03` to everyone else.
+
+`max_idle_ms` closes that. It applies only to connections whose client
+asked for keep-alive 0, and reclaims them after that long without
+traffic:
+
+```cpp
+struct MyTraits : minimosq::DefaultTraits {
+    static constexpr uint32_t max_idle_ms = 300000;  // 5 minutes
+};
+```
+
+It defaults to 0 (disabled), which is the letter of the spec and the
+pre-existing behaviour. Anything reachable by untrusted clients should
+set it. The member is optional — traits that predate it still compile
+and behave as if it were 0.
