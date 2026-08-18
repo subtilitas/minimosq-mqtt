@@ -45,6 +45,22 @@ prints it at startup. Dominant terms:
 Everything is a plain member array — the broker can live in static
 storage (`.bss`), which is exactly what the examples do.
 
+The term that actually decides the number is the per-session queue,
+because it is a *product*:
+
+```
+max_sessions x max_pending_per_session x (max_topic_len + max_payload_len)
+```
+
+At `DefaultTraits` that is 8 × 8 × (128 + 512) ≈ 41 KB of the ~76 KB
+total, and it is why the `Gateway` configuration in the footprint table
+costs ~600 KB rather than the ~150 KB the other knobs suggest. If a
+configuration comes out larger than expected, `max_pending_per_session`
+and `max_payload_len` are almost always the pair to look at first —
+halving either halves the dominant term. `tools/footprint.cpp` prints
+the measured size for several configurations, and the
+[Configuration](Configuration) page carries the generated table.
+
 ## Threading model
 
 Single-threaded by design. All broker entry points must be called from
@@ -104,7 +120,9 @@ Full details, the `TableAcl` component, and the threat model are in
 | Ill-formed UTF-8 in any MQTT string | connection closed, as [MQTT-1.5.3] requires |
 | Syntactically invalid topic filter in (UN)SUBSCRIBE | protocol violation: connection closed |
 | Valid filter beyond `max_topic_len`, or subscription table full | SUBACK 0x80 for that entry |
-| Duplicate identical filter within one SUBSCRIBE | retained message delivered once per entry |
+| Duplicate identical filter within one SUBSCRIBE | one subscription, one return code per entry, retained messages replayed once |
+| SUBSCRIBE/UNSUBSCRIBE that is a protocol error | validated in full before anything is applied, so the packet has no partial effect |
+| Client connects with keep-alive 0 | never timed out, unless `max_idle_ms` is set (see [Security](Security)) |
 | Empty client id, clean session | server assigns a unique `mmq-<n>` id |
 | Empty client id, persistent session | CONNACK 0x02, connection closed |
 | Retained store full / message too big to store | best effort: not stored, still forwarded live |
