@@ -63,10 +63,17 @@ public:
 
     // ------------------------------------------- startup configuration
 
-    // False when the table is full or an argument exceeds a capacity.
+    // False when the table is full, an argument exceeds a capacity, or
+    // the username is already registered (a duplicate is almost always a
+    // config typo, and silently keeping the first entry hides it).
     bool add_user(StrView username, StrView password, uint8_t role) {
         if (username.empty() || username.len > MaxNameLen || password.len > MaxSecretLen) {
             return false;
+        }
+        for (const User& existing : users_) {
+            if (existing.name.equals(username)) {
+                return false;
+            }
         }
         User* u = users_.emplace_back();
         if (u == nullptr) {
@@ -111,18 +118,28 @@ public:
             ctx.role = anon_role_;
             return ConnackCode::accepted;
         }
+        // The whole table is scanned whether or not the name matches, and
+        // the password of every entry is compared. An early return on the
+        // matching name would make "unknown user" measurably faster than
+        // "wrong password" and turn the broker into a user-enumeration
+        // oracle by timing, even though both answer bad_credentials.
+        const ByteSpan supplied = (password != nullptr) ? *password : ByteSpan{};
+        uint8_t found = 0;
+        uint8_t role = 0;
         for (const User& u : users_) {
-            if (u.name.equals(*username)) {
-                const ByteSpan supplied = (password != nullptr) ? *password : ByteSpan{};
-                if (!constant_time_eq(u.password.view(), supplied)) {
-                    return ConnackCode::bad_credentials;
-                }
-                ctx.role = u.role;
-                return ConnackCode::accepted;
-            }
+            const uint8_t name_hit = u.name.equals(*username) ? 1u : 0u;
+            const uint8_t pw_hit = constant_time_eq(u.password.view(), supplied) ? 1u : 0u;
+            const uint8_t hit = static_cast<uint8_t>(name_hit & pw_hit);
+            // Branch-free select: keep the first full match.
+            const uint8_t take = static_cast<uint8_t>(hit & (found ^ 1u));
+            role = static_cast<uint8_t>((role & (take - 1u)) | (u.role & (0u - take)));
+            found = static_cast<uint8_t>(found | hit);
         }
-        // Unknown user: indistinguishable from a wrong password.
-        return ConnackCode::bad_credentials;
+        if (found == 0) {
+            return ConnackCode::bad_credentials;
+        }
+        ctx.role = role;
+        return ConnackCode::accepted;
     }
 
     bool authorize_publish(const Context& c, StrView topic) {
