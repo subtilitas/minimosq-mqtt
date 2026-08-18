@@ -114,11 +114,22 @@ jobs:
         run: |
           set -eu
           NAME="minimosq-${{ steps.tag.outputs.version }}-headers"
-          mkdir -p "dist/$NAME"
-          cp -r include "dist/$NAME/"
-          cp LICENSE README.md "dist/$NAME/"
-          tar -czf "dist/$NAME.tar.gz" -C dist "$NAME"
+          # Stage the tree outside dist/. Everything in dist/ is uploaded
+          # as a release asset, and the upload API takes files only — a
+          # staging directory sitting next to the tarball fails the job
+          # with "is a directory".
+          mkdir -p "stage/$NAME" dist
+          cp -r include "stage/$NAME/"
+          cp LICENSE README.md "stage/$NAME/"
+          tar -czf "dist/$NAME.tar.gz" -C stage "$NAME"
           (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+
+          # Guard the invariant rather than trusting the next edit.
+          if find dist -mindepth 1 -maxdepth 1 ! -type f | grep -q .; then
+            echo "::error::dist/ must contain only files; found:"
+            find dist -mindepth 1 -maxdepth 1 ! -type f
+            exit 1
+          fi
           ls -l dist
 
       - name: Build the changelog
@@ -170,6 +181,10 @@ jobs:
         run: |
           set -eu
           TAG="${{ steps.tag.outputs.tag }}"
+          NAME="minimosq-${{ steps.tag.outputs.version }}-headers"
+          # Name the assets rather than globbing: a glob is what let a
+          # directory reach the upload API in the first place.
+          ASSETS="dist/$NAME.tar.gz dist/$NAME.tar.gz.sha256"
           # A pre-release tag (v0.1.0-rc1) is published as a pre-release.
           PRERELEASE=""
           case "$TAG" in *-*) PRERELEASE="--prerelease";; esac
@@ -178,9 +193,9 @@ jobs:
               --title "minimosq $TAG" \
               --notes-file CHANGELOG_RELEASE.md \
               $PRERELEASE
-            gh release upload "$TAG" dist/* --clobber
+            gh release upload "$TAG" $ASSETS --clobber
           else
-            gh release create "$TAG" dist/* \
+            gh release create "$TAG" $ASSETS \
               --title "minimosq $TAG" \
               --notes-file CHANGELOG_RELEASE.md \
               $PRERELEASE
