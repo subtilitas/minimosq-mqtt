@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 #include "test.hpp"
 
+#include <type_traits>
+
 #include <minimosq/topic.hpp>
 
 using namespace minimosq;
@@ -132,3 +134,12 @@ TEST(dollar_topics_not_matched_by_leading_wildcards) {
     // '$' only special in the first level.
     CHECK(topic_matches("a/#", "a/$weird"));
 }
+
+// A null C string must not compile into StrView; the deleted overload
+// is what stops cstr_len walking off a null pointer. Checked here
+// rather than at runtime, because the whole point is that it does not
+// build.
+static_assert(!std::is_constructible<minimosq::StrView, decltype(nullptr)>::value,
+              "StrView(nullptr) must be rejected at compile time");
+static_assert(std::is_constructible<minimosq::StrView, const char*>::value,
+              "StrView(const char*) must still work");

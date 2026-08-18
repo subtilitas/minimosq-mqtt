@@ -61,7 +61,11 @@ public:
 
     // Remove element i, shifting the tail left. Preserves relative order —
     // the broker relies on this for in-order message delivery.
+    // Out-of-range indices are ignored.
     void remove_ordered(size_t i) noexcept {
+        if (i >= size_) {
+            return;
+        }
         for (size_t j = i; j + 1 < size_; ++j) {
             *ptr(j) = static_cast<T&&>(*ptr(j + 1));
         }
@@ -69,15 +73,24 @@ public:
     }
 
     // Remove element i by moving the last element into its place. O(1),
-    // does not preserve order.
+    // does not preserve order. Out-of-range indices are ignored.
     void remove_unordered(size_t i) noexcept {
+        if (i >= size_) {
+            return;
+        }
         if (i + 1 < size_) {
             *ptr(i) = static_cast<T&&>(*ptr(size_ - 1));
         }
         pop_back();
     }
 
+    // No-op on an empty vector. The guard matters: without it size_
+    // underflows to SIZE_MAX and every later iteration walks off the end,
+    // which is a far worse failure than doing nothing.
     void pop_back() noexcept {
+        if (size_ == 0) {
+            return;
+        }
         ptr(size_ - 1)->~T();
         --size_;
     }
