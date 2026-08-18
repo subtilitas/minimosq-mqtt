@@ -62,6 +62,17 @@ struct DefaultTraits {
 
     // A connection must complete its CONNECT handshake within this time.
     static constexpr uint32_t connect_timeout_ms = 10000;
+
+    // Reclaim connections from clients that connected with keep-alive 0
+    // (which MQTT defines as "never time out") after this long without
+    // traffic. 0 disables it, matching the letter of the spec.
+    //
+    // Without this, a client that connects with keep-alive 0 and then
+    // goes silent holds its connection and session slot forever. That is
+    // conformant, but on a broker with a handful of slots it is also all
+    // an attacker needs. The member is optional: traits that omit it
+    // behave as if it were 0.
+    static constexpr uint32_t max_idle_ms = 0;
 };
 
 } // namespace minimosq
