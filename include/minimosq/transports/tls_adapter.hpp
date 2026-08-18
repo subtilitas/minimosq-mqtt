@@ -91,22 +91,31 @@ struct NullTlsEngine {
 template <typename Engine, typename RawTransport, size_t MaxConns, size_t BufSize = 4096>
 class TlsAdapter {
 public:
+    // Published so Broker can static_assert against Traits.
+    static constexpr size_t max_connections = MaxConns;
+
     explicit TlsAdapter(RawTransport& raw) noexcept : raw_(raw) {}
 
-    Engine& engine(size_t ci) noexcept { return engines_[ci]; }
+    Engine* engine(size_t ci) noexcept { return ci < MaxConns ? &engines_[ci] : nullptr; }
 
     // ------------------------- transport policy (the broker calls this)
 
     bool send(size_t ci, ByteSpan plaintext) {
-        uint8_t cipher[BufSize];
-        size_t cipher_len = 0;
-        if (!engines_[ci].encrypt(plaintext, cipher, sizeof cipher, cipher_len)) {
+        if (ci >= MaxConns) {
             return false;
         }
-        return cipher_len == 0 || raw_.send(ci, ByteSpan{cipher, cipher_len});
+        size_t cipher_len = 0;
+        if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len)) {
+            return false;
+        }
+        return cipher_len == 0 || raw_.send(ci, ByteSpan{cipher_, cipher_len});
     }
 
-    void close(size_t ci) { raw_.close(ci); }
+    void close(size_t ci) {
+        if (ci < MaxConns) {
+            raw_.close(ci);
+        }
+    }
 
     // ------------- broker-facing driver (the raw transport calls this)
     //
@@ -122,34 +131,46 @@ public:
         B& broker;
 
         Err conn_open(size_t ci, uint32_t now_ms) {
+            if (ci >= MaxConns) {
+                return Err::state;
+            }
             tls.engines_[ci].reset();
             return broker.conn_open(ci, now_ms);
         }
 
-        void conn_closed(size_t ci) { broker.conn_closed(ci); }
+        void conn_closed(size_t ci) {
+            if (ci < MaxConns) {
+                broker.conn_closed(ci);
+            }
+        }
 
         Err conn_data(size_t ci, ByteSpan cipher_in, uint32_t now_ms) {
-            uint8_t plain[BufSize];
-            uint8_t cipher_out[BufSize];
+            if (ci >= MaxConns) {
+                return Err::state;
+            }
+            // The record buffers live in the adapter, not on the stack:
+            // 2 x BufSize is 8 KB by default, which is a real fraction of
+            // a task stack on the embedded targets this library targets,
+            // and it lands at the deepest point of the call chain. The
+            // transport contract is single-threaded, so sharing is safe.
             size_t plain_len = 0;
             size_t cipher_out_len = 0;
-            if (!tls.engines_[ci].on_ciphertext(cipher_in, plain, sizeof plain, plain_len,
-                                                cipher_out, sizeof cipher_out,
-                                                cipher_out_len)) {
+            if (!tls.engines_[ci].on_ciphertext(cipher_in, tls.plain_, BufSize, plain_len,
+                                                tls.cipher_out_, BufSize, cipher_out_len)) {
                 tls.raw_.close(ci);
                 broker.conn_closed(ci);
                 return Err::malformed;
             }
             // Handshake/alert records the engine wants on the wire.
             if (cipher_out_len > 0) {
-                if (!tls.raw_.send(ci, ByteSpan{cipher_out, cipher_out_len})) {
+                if (!tls.raw_.send(ci, ByteSpan{tls.cipher_out_, cipher_out_len})) {
                     tls.raw_.close(ci);
                     broker.conn_closed(ci);
                     return Err::capacity;
                 }
             }
             if (plain_len > 0) {
-                return broker.conn_data(ci, ByteSpan{plain, plain_len}, now_ms);
+                return broker.conn_data(ci, ByteSpan{tls.plain_, plain_len}, now_ms);
             }
             return Err::ok;
         }
@@ -165,6 +186,11 @@ public:
 private:
     RawTransport& raw_;
     Engine engines_[MaxConns];
+    // Shared record scratch; see Driver::conn_data. Only ever live for
+    // the duration of one call.
+    uint8_t plain_[BufSize];
+    uint8_t cipher_out_[BufSize];
+    uint8_t cipher_[BufSize];
 };
 
 } // namespace minimosq

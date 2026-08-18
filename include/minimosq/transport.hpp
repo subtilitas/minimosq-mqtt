@@ -35,8 +35,13 @@
 //     same thread (or be externally serialized).
 //   - now_ms is a monotonic millisecond clock; wrap-around is handled.
 //
+//   - A transport may publish `static constexpr size_t max_connections`.
+//     When it does, Broker static_asserts that it is at least
+//     Traits::max_connections, which catches a mis-sized transport at
+//     compile time instead of as an out-of-bounds write.
+//
 // See transports/posix/ for reference implementations (TCP, unix
-// domain sockets, pipes) and transports/tls_skeleton.hpp for how a TLS
+// domain sockets, pipes) and transports/tls_adapter.hpp for how a TLS
 // engine slots in between.
 //
 // SPDX-License-Identifier: MIT

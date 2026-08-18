@@ -37,6 +37,13 @@ namespace minimosq {
 template <size_t OutBufSize = 4096>
 class PipeTransport {
 public:
+    // The pipe transport serves exactly one connection, index 0.
+    static constexpr size_t max_connections = 1;
+
+    // See StreamServerTransport: bounded drain so a chatty peer cannot
+    // starve broker.tick().
+    static constexpr int max_reads_per_pass = 8;
+
     PipeTransport() = default;
     PipeTransport(const PipeTransport&) = delete;
     PipeTransport& operator=(const PipeTransport&) = delete;
@@ -136,7 +143,7 @@ private:
     template <typename B>
     void read_into_broker(B& broker, uint32_t now) {
         uint8_t buf[2048];
-        while (rfd_ >= 0) {
+        for (int reads = 0; reads < max_reads_per_pass && rfd_ >= 0; ++reads) {
             const ssize_t r = ::read(rfd_, buf, sizeof buf);
             if (r > 0) {
                 broker.conn_data(0, ByteSpan{buf, static_cast<size_t>(r)}, now);

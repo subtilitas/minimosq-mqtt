@@ -37,6 +37,16 @@ constexpr int stream_send_flags = 0;
 template <size_t MaxConns, size_t OutBufSize = 4096>
 class StreamServerTransport {
 public:
+    // Published so Broker can static_assert that the transport has at
+    // least Traits::max_connections slots.
+    static constexpr size_t max_connections = MaxConns;
+
+    // Reads taken from one connection per poll pass. Without a cap, a
+    // peer that keeps its socket full is drained until EAGAIN, which
+    // starves every other connection and stops broker.tick() — and with
+    // it the keep-alive and handshake timeouts — from running at all.
+    static constexpr int max_reads_per_pass = 8;
+
     StreamServerTransport() = default;
     StreamServerTransport(const StreamServerTransport&) = delete;
     StreamServerTransport& operator=(const StreamServerTransport&) = delete;
@@ -55,6 +65,9 @@ public:
     // ------------------------------------ transport policy (broker-facing)
 
     bool send(size_t ci, ByteSpan bytes) {
+        if (ci >= MaxConns) {
+            return false;  // mis-sized transport; see the static_assert in Broker
+        }
         Slot& s = slots_[ci];
         if (s.fd < 0) {
             return false;
@@ -67,6 +80,9 @@ public:
     }
 
     void close(size_t ci) {
+        if (ci >= MaxConns) {
+            return;
+        }
         Slot& s = slots_[ci];
         if (s.fd < 0) {
             return;
@@ -203,11 +219,13 @@ private:
     template <typename B>
     void read_into_broker(B& broker, size_t ci, uint32_t now) {
         uint8_t buf[2048];
-        while (slots_[ci].fd >= 0) {
+        // Bounded drain: whatever is left stays readable and the next
+        // poll() picks it up, so one busy peer cannot monopolise the loop.
+        for (int reads = 0; reads < max_reads_per_pass && slots_[ci].fd >= 0; ++reads) {
             const ssize_t r = ::read(slots_[ci].fd, buf, sizeof buf);
             if (r > 0) {
                 broker.conn_data(ci, ByteSpan{buf, static_cast<size_t>(r)}, now);
-                continue;  // drain until EAGAIN (edge cases: broker may close mid-loop)
+                continue;  // broker may close the slot mid-loop; the guard catches it
             }
             if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 return;

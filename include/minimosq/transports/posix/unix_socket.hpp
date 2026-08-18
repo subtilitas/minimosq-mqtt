@@ -15,6 +15,7 @@
 #define MINIMOSQ_TRANSPORTS_POSIX_UNIX_SOCKET_HPP
 
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -31,7 +32,12 @@ public:
         }
     }
 
-    bool open(const char* path) {
+    // The socket file is created with mode 0600 by default: this
+    // transport's entire security story is filesystem permissions, and
+    // inheriting the process umask usually means 0755 — connectable by
+    // every local user. Pass a wider mode (e.g. 0660 with a shared
+    // group) deliberately if clients run as other users.
+    bool open(const char* path, mode_t mode = 0600) {
         const size_t len = cstr_len(path);
         if (len == 0 || len >= sizeof path_) {
             return false;
@@ -47,9 +53,16 @@ public:
         for (size_t i = 0; i <= len; ++i) {
             addr.sun_path[i] = path[i];
         }
-        if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0 ||
-            ::listen(fd, 8) != 0 || !set_nonblocking(fd)) {
+        // umask around bind() closes the window in which the socket
+        // exists with permissions wider than requested; chmod afterwards
+        // pins the exact mode regardless of what the umask allowed.
+        const mode_t old_umask = ::umask(static_cast<mode_t>(0777) & ~mode);
+        const int bind_rc = ::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr);
+        ::umask(old_umask);
+        if (bind_rc != 0 || ::chmod(path, mode) != 0 || ::listen(fd, 8) != 0 ||
+            !set_nonblocking(fd)) {
             ::close(fd);
+            ::unlink(path);
             return false;
         }
         for (size_t i = 0; i <= len; ++i) {
