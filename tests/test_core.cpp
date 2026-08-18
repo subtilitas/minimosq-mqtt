@@ -198,3 +198,88 @@ TEST(fixed_buffer_assign_and_reject) {
     CHECK(!b.assign(ByteSpan{five, 5}));
     CHECK(b.view() == ByteSpan(four, 4));
 }
+
+// ------------------------------------------------- misuse resistance
+//
+// These guard the precondition checks added after review: the old code
+// underflowed size_t on each of these paths, which is far worse than a
+// no-op because every later iteration then walks off the end.
+
+TEST(static_vector_pop_back_on_empty_is_a_noop) {
+    StaticVector<int, 4> v;
+    v.pop_back();
+    CHECK_EQ(v.size(), 0u);
+    CHECK(v.empty());
+    CHECK(!v.full());
+
+    v.remove_ordered(0);
+    CHECK_EQ(v.size(), 0u);
+    v.remove_unordered(0);
+    CHECK_EQ(v.size(), 0u);
+
+    // Still usable afterwards.
+    CHECK(v.push_back(7));
+    CHECK_EQ(v.size(), 1u);
+    CHECK_EQ(v[0], 7);
+}
+
+TEST(static_vector_remove_out_of_range_is_a_noop) {
+    StaticVector<int, 4> v;
+    CHECK(v.push_back(1));
+    CHECK(v.push_back(2));
+
+    v.remove_ordered(2);    // == size
+    v.remove_unordered(99);  // way past the end
+    CHECK_EQ(v.size(), 2u);
+    CHECK_EQ(v[0], 1);
+    CHECK_EQ(v[1], 2);
+}
+
+TEST(pool_double_release_is_a_noop) {
+    Pool<int, 4> p;
+    int* a = p.alloc();
+    CHECK(a != nullptr);
+    CHECK_EQ(p.size(), 1u);
+
+    p.release(a);
+    CHECK_EQ(p.size(), 0u);
+    p.release(a);  // double release must not underflow count_
+    CHECK_EQ(p.size(), 0u);
+    CHECK(p.empty());
+    CHECK(!p.full());
+
+    // The pool still hands out all four slots.
+    for (int i = 0; i < 4; ++i) {
+        CHECK(p.alloc() != nullptr);
+    }
+    CHECK(p.full());
+    CHECK(p.alloc() == nullptr);
+}
+
+TEST(pool_release_of_a_foreign_pointer_is_a_noop) {
+    Pool<int, 2> p;
+    int* a = p.alloc();
+    CHECK(a != nullptr);
+
+    int stack_object = 0;
+    p.release(&stack_object);  // never came from this pool
+    p.release(nullptr);
+    CHECK_EQ(p.size(), 1u);
+
+    p.release(a);
+    CHECK_EQ(p.size(), 0u);
+}
+
+TEST(pool_release_runs_the_destructor_exactly_once) {
+    static int dtors = 0;
+    struct Counted {
+        ~Counted() { ++dtors; }
+    };
+    dtors = 0;
+    Pool<Counted, 2> p;
+    Counted* c = p.alloc();
+    p.release(c);
+    CHECK_EQ(dtors, 1);
+    p.release(c);  // must not destroy it a second time
+    CHECK_EQ(dtors, 1);
+}

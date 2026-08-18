@@ -42,9 +42,15 @@ public:
         return nullptr;
     }
 
-    // Destroy an object previously returned by alloc().
+    // Destroy an object previously returned by alloc(). A null pointer,
+    // a pointer outside this pool, an interior pointer, or a slot that
+    // is already free is ignored: without the check a double release
+    // destroys the object twice and underflows count_ to SIZE_MAX.
     void release(T* p) noexcept {
-        const size_t i = index_of(p);
+        const size_t i = slot_index(p);
+        if (i >= Capacity || !used_[i]) {
+            return;
+        }
         p->~T();
         used_[i] = false;
         --count_;
@@ -93,6 +99,22 @@ public:
     }
 
 private:
+    // Slot index of p, or Capacity if p is null, outside the pool, or
+    // not exactly at a slot boundary. Comparison goes through the byte
+    // representation so a foreign pointer never reaches the division.
+    size_t slot_index(const T* p) const noexcept {
+        if (p == nullptr) {
+            return Capacity;
+        }
+        const unsigned char* q = reinterpret_cast<const unsigned char*>(p);
+        for (size_t i = 0; i < Capacity; ++i) {
+            if (q == storage_ + i * sizeof(T)) {
+                return i;
+            }
+        }
+        return Capacity;
+    }
+
     void* slot(size_t i) noexcept { return storage_ + i * sizeof(T); }
 
     T* ptr(size_t i) noexcept {

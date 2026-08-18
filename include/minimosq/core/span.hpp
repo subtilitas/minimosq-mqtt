@@ -68,6 +68,10 @@ struct StrView {
     // in application code and tests.
     constexpr StrView(const char* zstr) noexcept : data(zstr), len(cstr_len(zstr)) {}
 
+    // `StrView s = nullptr;` would otherwise walk off a null pointer in
+    // cstr_len. Use StrView{} for the empty view.
+    StrView(decltype(nullptr)) = delete;
+
     constexpr bool empty() const noexcept { return len == 0; }
     constexpr char operator[](size_t i) const noexcept { return data[i]; }
 
