@@ -120,3 +120,59 @@ TEST(table_acl_end_to_end) {
     expect_connack(x.t, 2, false, ConnackCode::bad_credentials);
     CHECK(x.t.logs[2].closed);
 }
+
+// ------------------------------------------- post-review regressions
+
+TEST(table_acl_rejects_duplicate_usernames) {
+    TableAcl<4, 4> acl;
+    CHECK(acl.add_user("alice", "pw1", 1));
+    CHECK(!acl.add_user("alice", "pw2", 2));  // duplicate: config typo
+
+    // The first registration still stands, and the second password
+    // never became valid.
+    TableAcl<4, 4>::Context ctx{};
+    const StrView user = "alice";
+    const ByteSpan pw1 = StrView("pw1").bytes();
+    const ByteSpan pw2 = StrView("pw2").bytes();
+    CHECK(acl.authenticate("c", &user, &pw1, ctx) == ConnackCode::accepted);
+    CHECK_EQ(ctx.role, 1);
+    CHECK(acl.authenticate("c", &user, &pw2, ctx) == ConnackCode::bad_credentials);
+}
+
+TEST(table_acl_scans_every_user_regardless_of_match) {
+    // Whichever position a user occupies, authentication must succeed
+    // with the right role: the lookup no longer returns early, so this
+    // also pins the branch-free selection logic.
+    TableAcl<4, 8> acl;
+    CHECK(acl.add_user("first", "a", 11));
+    CHECK(acl.add_user("middle", "b", 22));
+    CHECK(acl.add_user("last", "c", 33));
+
+    struct Case {
+        const char* name;
+        const char* pw;
+        uint8_t role;
+    };
+    const Case cases[] = {{"first", "a", 11}, {"middle", "b", 22}, {"last", "c", 33}};
+    for (const Case& c : cases) {
+        TableAcl<4, 8>::Context ctx{};
+        const StrView name = c.name;
+        const ByteSpan pw = StrView(c.pw).bytes();
+        CHECK(acl.authenticate("cid", &name, &pw, ctx) == ConnackCode::accepted);
+        CHECK_EQ(ctx.role, c.role);
+    }
+
+    // Right name, wrong password; and a name that is not in the table.
+    TableAcl<4, 8>::Context ctx{};
+    const StrView name = "middle";
+    const ByteSpan wrong = StrView("nope").bytes();
+    CHECK(acl.authenticate("cid", &name, &wrong, ctx) == ConnackCode::bad_credentials);
+    const StrView ghost = "nobody";
+    const ByteSpan any = StrView("b").bytes();
+    CHECK(acl.authenticate("cid", &ghost, &any, ctx) == ConnackCode::bad_credentials);
+
+    // A password that matches a *different* user must not authenticate.
+    const StrView first = "first";
+    const ByteSpan bpw = StrView("b").bytes();
+    CHECK(acl.authenticate("cid", &first, &bpw, ctx) == ConnackCode::bad_credentials);
+}
