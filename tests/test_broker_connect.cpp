@@ -254,3 +254,58 @@ TEST(clean_session_frees_the_slot_on_disconnect) {
     x.connect(3, "d");
     expect_connack(x.t, 3, false, ConnackCode::accepted);
 }
+
+// ------------------------------------------- post-review regressions
+
+// Same as SmallTraits but with idle reclamation enabled, so a client
+// that asks for keep-alive 0 and then goes quiet does not hold its
+// connection and session slot forever.
+struct IdleTraits : bt::SmallTraits {
+    static constexpr uint32_t max_idle_ms = 30000;
+};
+
+TEST(zero_keepalive_is_reclaimed_when_max_idle_is_set) {
+    struct Fixture {
+        using Transport = bt::CaptureTransport<IdleTraits::max_connections>;
+        Transport t;
+        Broker<IdleTraits, Transport> b{t};
+    } x;
+
+    CHECK(x.b.conn_open(0, 1000) == Err::ok);
+    wire::ConnectOpts o;
+    o.keepalive_s = 0;
+    const wire::Pkt cp = wire::make_connect("idle", o);
+    x.b.conn_data(0, cp.span(), 1000);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    x.b.tick(1000 + 29000);  // inside the idle window
+    CHECK(!x.t.logs[0].closed);
+
+    x.b.tick(1000 + 31000);  // past it
+    CHECK(x.t.logs[0].closed);
+}
+
+TEST(traffic_refreshes_the_idle_deadline) {
+    struct Fixture {
+        using Transport = bt::CaptureTransport<IdleTraits::max_connections>;
+        Transport t;
+        Broker<IdleTraits, Transport> b{t};
+    } x;
+
+    CHECK(x.b.conn_open(0, 1000) == Err::ok);
+    wire::ConnectOpts o;
+    o.keepalive_s = 0;
+    const wire::Pkt cp = wire::make_connect("busy", o);
+    x.b.conn_data(0, cp.span(), 1000);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    // A PINGREQ at t+20s pushes the deadline out to t+50s.
+    const wire::Pkt ping = wire::make_pingreq();
+    x.b.conn_data(0, ping.span(), 1000 + 20000);
+    expect_pingresp(x.t, 0);
+
+    x.b.tick(1000 + 45000);
+    CHECK(!x.t.logs[0].closed);
+    x.b.tick(1000 + 55000);
+    CHECK(x.t.logs[0].closed);
+}

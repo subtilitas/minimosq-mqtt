@@ -38,6 +38,7 @@
 #include <cstdint>
 
 #include "../core/error.hpp"
+#include "../core/pool.hpp"
 #include "../core/span.hpp"
 #include "../protocol/constants.hpp"
 #include "../protocol/frame.hpp"
@@ -96,8 +97,43 @@ struct AllowAllSecurity {
     }
 };
 
+// ------------------------------------------------ optional trait probes
+//
+// Both members below were added after the initial release. Detecting
+// them instead of requiring them keeps existing user-written Traits
+// compiling unchanged.
+
+template <typename T, typename = void>
+struct traits_max_idle_ms {
+    static constexpr uint32_t value = 0;
+};
+template <typename T>
+struct traits_max_idle_ms<T, decltype((void)T::max_idle_ms)> {
+    static constexpr uint32_t value = T::max_idle_ms;
+};
+
+// A transport that publishes its connection capacity lets the broker
+// check at compile time that the two agree; one that does not is
+// assumed to be correctly sized (0 = "did not say").
+template <typename T, typename = void>
+struct transport_max_connections {
+    static constexpr size_t value = 0;
+};
+template <typename T>
+struct transport_max_connections<T, decltype((void)T::max_connections)> {
+    static constexpr size_t value = T::max_connections;
+};
+
 template <typename Traits, typename Transport, typename Security = AllowAllSecurity>
 class Broker {
+    // A transport with fewer slots than the broker hands out indices for
+    // is an out-of-bounds write waiting to happen, and nothing about the
+    // two declarations forces them to agree — so check it here.
+    static_assert(transport_max_connections<Transport>::value == 0 ||
+                      transport_max_connections<Transport>::value >= Traits::max_connections,
+                  "Transport has fewer connection slots than Traits::max_connections; "
+                  "size the transport with Traits::max_connections");
+
 public:
     static constexpr size_t max_connections = Traits::max_connections;
 
@@ -143,9 +179,10 @@ public:
             return Err::ok;
         }
         now_ms_ = now_ms;
-        // Any traffic refreshes the keep-alive deadline [MQTT-3.1.2.10].
-        if (c.session != no_session && c.keepalive_s > 0) {
-            c.deadline_ms = now_ms + keepalive_window_ms(c.keepalive_s);
+        // Any traffic refreshes the keep-alive deadline [MQTT-3.1.2.10],
+        // or the idle deadline when keep-alive is disabled.
+        if (c.session != no_session) {
+            refresh_deadline(c, now_ms);
         }
         const Err e = c.parser.feed(
             data, [&](uint8_t first_byte, ByteSpan body) { return on_packet(ci, first_byte, body); });
@@ -164,7 +201,8 @@ public:
             if (!c.active || c.dead) {
                 continue;
             }
-            const bool armed = (c.session == no_session) || c.keepalive_s > 0;
+            const bool armed =
+                (c.session == no_session) || c.keepalive_s > 0 || max_idle_ms > 0;
             if (armed && deadline_passed(now_ms, c.deadline_ms)) {
                 c.dead = true;  // abnormal: will fires [MQTT-3.1.2-24]
             }
@@ -180,7 +218,10 @@ public:
         if (!topic_name_valid(topic)) {
             return Err::malformed;
         }
-        if (2 + topic.len + payload.len > out_size - packet_overhead) {
+        // 2-byte topic length prefix, the topic, the packet identifier
+        // that QoS > 0 adds, and the payload.
+        const size_t id_len = (qos == QoS::at_most_once) ? 0u : 2u;
+        if (2 + topic.len + id_len + payload.len > out_size - packet_overhead) {
             return Err::oversize;  // could never be built for any subscriber
         }
         Err result = Err::ok;
@@ -220,10 +261,22 @@ private:
 
     // ---------------------------------------------------------- helpers
 
+    static constexpr uint32_t max_idle_ms = traits_max_idle_ms<Traits>::value;
+
     static constexpr uint32_t keepalive_window_ms(uint16_t keepalive_s) noexcept {
         // The server must allow one and a half keep-alive periods
         // [MQTT-3.1.2-24].
         return static_cast<uint32_t>(keepalive_s) * 1500u;
+    }
+
+    // Deadline for a connected session: the keep-alive window, or the
+    // optional idle timeout when the client asked for no keep-alive.
+    static void refresh_deadline(Conn& c, uint32_t now_ms) noexcept {
+        if (c.keepalive_s > 0) {
+            c.deadline_ms = now_ms + keepalive_window_ms(c.keepalive_s);
+        } else if (max_idle_ms > 0) {
+            c.deadline_ms = now_ms + max_idle_ms;
+        }
     }
 
     static bool deadline_passed(uint32_t now, uint32_t deadline) noexcept {
@@ -622,9 +675,7 @@ private:
 
         c.session = static_cast<uint16_t>(sessions_.index_of(s));
         c.keepalive_s = p.keepalive_s;
-        if (p.keepalive_s > 0) {
-            c.deadline_ms = now_ms_ + keepalive_window_ms(p.keepalive_s);
-        }
+        refresh_deadline(c, now_ms_);
 
         send_to(ci, build_connack(out_, sizeof out_, session_present, ConnackCode::accepted));
 
@@ -744,65 +795,100 @@ private:
         send_to(ci, build_packet_id_only(out_, sizeof out_, PacketType::pubcomp, id));
     }
 
+    // SUBSCRIBE is handled in three passes so that a packet which turns
+    // out to be a protocol error has no effect at all, and so that
+    // retained replay follows the grants this packet actually made
+    // rather than being re-derived from the subscription table.
     void handle_subscribe(size_t ci, ByteSpan body) {
         Conn& c = conns_[ci];
         SessionT& s = *session_of(c);
 
-        // First pass: apply subscriptions while streaming the SUBACK
-        // return codes straight into the outgoing packet buffer.
+        // Pass 1: validate every entry before touching session state.
+        // A malformed filter anywhere means the whole packet is a
+        // protocol error [MQTT-4.8], so nothing may have been applied.
+        {
+            TopicListParser check{body, /*with_qos=*/true};
+            StrView filter;
+            QoS requested = QoS::at_most_once;
+            while (check.next(filter, requested)) {
+                if (!topic_filter_valid(filter)) {
+                    c.dead = true;  // ill-formed filter [MQTT-4.7.3-1, -1.5.3-1]
+                    return;
+                }
+            }
+            if (check.status() != Err::ok) {
+                c.dead = true;
+                return;
+            }
+        }
+
+        // Pass 2: apply subscriptions, streaming the SUBACK return codes
+        // straight into the outgoing packet buffer. Every entry is known
+        // to be syntactically valid by now, so this pass cannot bail out.
+        for (typename SessionT::Subscription& sub : s.subs) {
+            sub.retain_pending = false;  // stale flags from an earlier packet
+        }
         TopicListParser entries{body, /*with_qos=*/true};
         Writer w{out_ + packet_overhead, sizeof out_ - packet_overhead};
         w.u16(entries.packet_id());
 
         StrView filter;
         QoS requested = QoS::at_most_once;
-        bool violation = false;
         while (entries.next(filter, requested)) {
-            if (!topic_filter_valid(filter)) {
-                violation = true;  // ill-formed filter [MQTT-4.7.3-1, -1.5.3-1]
-                break;
-            }
             if (!security_.authorize_subscribe(s.auth_ctx, filter)) {
                 w.u8(suback_failure);  // authorization refusal [MQTT-3.8.4-5]
                 continue;
             }
-            w.u8(subscribe_one(s, filter, requested));
+            typename SessionT::Subscription* sub = nullptr;
+            w.u8(subscribe_one(s, filter, requested, &sub));
+            if (sub != nullptr) {
+                // Marks the grant for pass 3. A filter repeated inside
+                // one SUBSCRIBE resolves to the same Subscription, so
+                // its retained messages are still replayed only once.
+                sub->retain_pending = true;
+            }
         }
-        if (violation || entries.status() != Err::ok || !w.ok()) {
-            c.dead = true;  // protocol error: close without SUBACK [MQTT-4.8]
+        if (!w.ok()) {
+            c.dead = true;  // SUBACK does not fit: cannot answer, so close
             return;
         }
         send_to(ci, frame_packet(out_, make_first_byte(PacketType::suback, 0), w.size()));
 
-        // Second pass: deliver retained messages for the accepted
-        // entries [MQTT-3.3.1-6]. Runs after the SUBACK is on the wire.
-        TopicListParser again{body, /*with_qos=*/true};
-        while (again.next(filter, requested)) {
-            typename SessionT::Subscription* sub = s.find_sub(filter);
-            if (sub == nullptr) {
-                continue;  // this entry was refused above
+        // Pass 3: deliver retained messages for the entries this packet
+        // granted [MQTT-3.3.1-6]. Runs after the SUBACK is on the wire.
+        // Driven off the session's own table rather than the packet, so
+        // a subscription that merely already existed — and was refused
+        // this time round — replays nothing.
+        for (typename SessionT::Subscription& sub : s.subs) {
+            if (!sub.retain_pending) {
+                continue;
             }
-            retained_.for_each_match(filter, [&](typename RetainedStore<Traits>::Entry& e) {
-                if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
-                    return;
-                }
-                // Retained delivery at min(granted, stored QoS), with
-                // the retain flag set [MQTT-3.3.1-8].
-                const QoS eff = qos_min(sub->granted, e.qos);
-                if (eff == QoS::at_most_once) {
-                    send_to(ci, build_publish(out_, sizeof out_, e.topic.view(),
-                                              e.payload.view(), QoS::at_most_once,
-                                              /*retain=*/true, false, 0));
-                } else {
-                    enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
-                }
-            });
+            sub.retain_pending = false;
+            retained_.for_each_match(
+                sub.filter.view(), [&](typename RetainedStore<Traits>::Entry& e) {
+                    if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
+                        return;
+                    }
+                    // Retained delivery at min(granted, stored QoS), with
+                    // the retain flag set [MQTT-3.3.1-8].
+                    const QoS eff = qos_min(sub.granted, e.qos);
+                    if (eff == QoS::at_most_once) {
+                        send_to(ci, build_publish(out_, sizeof out_, e.topic.view(),
+                                                  e.payload.view(), QoS::at_most_once,
+                                                  /*retain=*/true, false, 0));
+                    } else {
+                        enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
+                    }
+                });
         }
     }
 
     // Apply a single (syntactically valid) subscription request;
-    // returns the SUBACK code — 0x80 for capacity refusals.
-    uint8_t subscribe_one(SessionT& s, StrView filter, QoS requested) {
+    // returns the SUBACK code — 0x80 for capacity refusals. On success
+    // *out_sub points at the resulting subscription, otherwise nullptr.
+    uint8_t subscribe_one(SessionT& s, StrView filter, QoS requested,
+                          typename SessionT::Subscription** out_sub) {
+        *out_sub = nullptr;
         if (filter.len > Traits::max_topic_len) {
             return suback_failure;
         }
@@ -815,6 +901,7 @@ private:
             sub->filter.assign(filter);
         }
         sub->granted = requested;  // full requested QoS is supported
+        *out_sub = sub;
         return static_cast<uint8_t>(sub->granted);
     }
 
@@ -822,24 +909,34 @@ private:
         Conn& c = conns_[ci];
         SessionT& s = *session_of(c);
 
+        // Validate the whole packet before removing anything, so an
+        // UNSUBSCRIBE that is a protocol error has no partial effect.
+        {
+            TopicListParser check{body, /*with_qos=*/false};
+            StrView filter;
+            QoS ignored = QoS::at_most_once;
+            while (check.next(filter, ignored)) {
+                if (!topic_filter_valid(filter)) {
+                    c.dead = true;  // ill-formed filter [MQTT-4.7.3-1]
+                    return;
+                }
+            }
+            if (check.status() != Err::ok) {
+                c.dead = true;
+                return;
+            }
+        }
+
         TopicListParser entries{body, /*with_qos=*/false};
         StrView filter;
         QoS ignored = QoS::at_most_once;
         while (entries.next(filter, ignored)) {
-            if (!topic_filter_valid(filter)) {
-                c.dead = true;  // ill-formed filter [MQTT-4.7.3-1]
-                return;
-            }
             for (size_t i = 0; i < s.subs.size(); ++i) {
                 if (s.subs[i].filter.equals(filter)) {
                     s.subs.remove_ordered(i);  // exact match only [MQTT-3.10.4]
                     break;
                 }
             }
-        }
-        if (entries.status() != Err::ok) {
-            c.dead = true;
-            return;
         }
         send_to(ci, build_packet_id_only(out_, sizeof out_, PacketType::unsuback,
                                          entries.packet_id()));

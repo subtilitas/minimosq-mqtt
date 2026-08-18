@@ -200,3 +200,109 @@ TEST(context_refreshed_on_reconnect) {
     expect_ack(x.t, 1, PacketType::puback, 9);
     expect_silence(x.t, 2);  // denied under the refreshed context
 }
+
+// ------------------------------------------- post-review regressions
+
+// A policy whose subscribe check is stricter than its receive check —
+// the shape that exposed the retained-replay bypass. Real examples: a
+// wildcard-subscription ban, or a per-filter subscription quota.
+struct StricterSubscribeSecurity {
+    struct Context {
+        int unused = 0;
+    };
+    bool allow_subscribe = true;
+
+    ConnackCode authenticate(StrView, const StrView*, const ByteSpan*, Context&) {
+        return ConnackCode::accepted;
+    }
+    bool authorize_publish(const Context&, StrView) { return true; }
+    bool authorize_subscribe(const Context&, StrView) { return allow_subscribe; }
+    bool authorize_receive(const Context&, StrView) { return true; }
+};
+
+TEST(refused_resubscribe_does_not_replay_retained_messages) {
+    bt::BedT<StricterSubscribeSecurity> x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    x.feed(0, wire::make_publish("a/x", wire::bs("RET"), QoS::at_most_once, /*retain=*/true));
+
+    // First SUBSCRIBE is granted and replays the retained message.
+    x.connect(1, "sub");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.feed(1, wire::make_subscribe(1, {{"a/x", 0}}));
+    const uint8_t granted[] = {0};
+    expect_suback(x.t, 1, 1, granted);
+    expect_publish(x.t, 1, "a/x", wire::bs("RET"), QoS::at_most_once, /*retain=*/true);
+    expect_silence(x.t, 1);
+
+    // Policy revoked. The same SUBSCRIBE must be refused *and* must not
+    // replay anything, even though the earlier subscription still
+    // exists in the session's table.
+    x.b.security().allow_subscribe = false;
+    x.feed(1, wire::make_subscribe(2, {{"a/x", 0}}));
+    const uint8_t refused[] = {suback_failure};
+    expect_suback(x.t, 1, 2, refused);
+    expect_silence(x.t, 1);
+}
+
+TEST(duplicate_filter_in_one_subscribe_replays_retained_once) {
+    bt::Bed x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    x.feed(0, wire::make_publish("a/x", wire::bs("RET"), QoS::at_most_once, /*retain=*/true));
+
+    x.connect(1, "sub");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.feed(1, wire::make_subscribe(1, {{"a/x", 0}, {"a/x", 0}}));
+
+    // One return code per entry [MQTT-3.8.4-5], but the two entries
+    // resolve to a single subscription, so one retained delivery.
+    const uint8_t codes[] = {0, 0};
+    expect_suback(x.t, 1, 1, codes);
+    expect_publish(x.t, 1, "a/x", wire::bs("RET"), QoS::at_most_once, /*retain=*/true);
+    expect_silence(x.t, 1);
+}
+
+TEST(malformed_subscribe_applies_nothing_at_all) {
+    bt::Bed x;
+    wire::ConnectOpts persistent;
+    persistent.clean = false;
+
+    // "bad/#/x" is an invalid filter, so the whole packet is a protocol
+    // error and the valid entry ahead of it must not take effect.
+    x.connect(0, "keeper", persistent);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    x.feed(0, wire::make_subscribe(1, {{"good/topic", 0}, {"bad/#/x", 0}}));
+    CHECK(x.t.logs[0].closed);
+    expect_silence(x.t, 0);  // closed without SUBACK [MQTT-4.8]
+
+    // Resume the persistent session: the subscription must be absent.
+    x.connect(1, "keeper", persistent);
+    expect_connack(x.t, 1, /*session_present=*/true, ConnackCode::accepted);
+    x.connect(2, "pub");
+    expect_connack(x.t, 2, false, ConnackCode::accepted);
+    x.feed(2, wire::make_publish("good/topic", wire::bs("hi")));
+    expect_silence(x.t, 1);
+}
+
+TEST(malformed_unsubscribe_removes_nothing) {
+    bt::Bed x;
+    wire::ConnectOpts persistent;
+    persistent.clean = false;
+    x.connect(0, "keeper", persistent);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    x.feed(0, wire::make_subscribe(1, {{"good/topic", 0}}));
+    const uint8_t codes[] = {0};
+    expect_suback(x.t, 0, 1, codes);
+
+    // Valid entry first, invalid second: nothing may be removed.
+    x.feed(0, wire::make_unsubscribe(2, {"good/topic", "bad/#/x"}));
+    CHECK(x.t.logs[0].closed);
+
+    x.connect(1, "keeper", persistent);
+    expect_connack(x.t, 1, /*session_present=*/true, ConnackCode::accepted);
+    x.connect(2, "pub");
+    expect_connack(x.t, 2, false, ConnackCode::accepted);
+    x.feed(2, wire::make_publish("good/topic", wire::bs("still-here")));
+    expect_publish(x.t, 1, "good/topic", wire::bs("still-here"), QoS::at_most_once, false);
+}

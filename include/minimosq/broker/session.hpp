@@ -34,6 +34,10 @@ struct Session {
     struct Subscription {
         FixedString<Traits::max_topic_len> filter;
         QoS granted = QoS::at_most_once;
+        // Scratch flag owned by SUBSCRIBE handling: set when *this*
+        // SUBSCRIBE granted the entry, cleared once its retained
+        // messages have been replayed. Never read outside that handler.
+        bool retain_pending = false;
     };
 
     // An owned copy of a QoS 1/2 message being delivered to this
