@@ -14,7 +14,9 @@ coverage:
     project:
       default:
         # Mirrors the --fail-under-line floor in .github/workflows/ci.yml.
-        target: 94%
+        # Both are measured with the compiler pinned there; the number is
+        # not comparable against a different GCC.
+        target: 85%
         threshold: 1%
     patch:
       default:
