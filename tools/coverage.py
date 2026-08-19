@@ -165,24 +165,52 @@ def group_of(name):
     return "other"
 
 
+def classify(lines, branches):
+    """Split every source line into full / partial / missed.
+
+    A line is *full* when it executed and every branch on it was taken,
+    *partial* when it executed but some branch was not, and *missed*
+    when it never executed. Codecov reports only `full` as covered, so
+    reporting the same split here keeps the gate and the badge talking
+    about the same number.
+    """
+    per_file = {}
+    for name, line_map in lines.items():
+        by_line = collections.defaultdict(list)
+        for (number, _idx), taken in branches.get(name, {}).items():
+            by_line[number].append(taken)
+        full = partial = missed = 0
+        for number, executed in line_map.items():
+            if not executed:
+                missed += 1
+            elif all(by_line.get(number, [])):
+                full += 1
+            else:
+                partial += 1
+        per_file[name] = (len(line_map), full, partial, missed)
+    return per_file
+
+
 def table(lines, branches):
+    per_file = classify(lines, branches)
     rows = []
     for name in sorted(lines):
-        hit = sum(lines[name].values())
-        total = len(lines[name])
-        rows.append((name, total, hit, 100.0 * hit / total if total else 100.0))
+        total, full, partial, missed = per_file[name]
+        rows.append((name, total, full, partial, missed))
 
     totals = collections.Counter()
-    for name, total, hit, _pct in rows:
+    for name, total, full, partial, _missed in rows:
         label = group_of(name)
         totals[label + ":total"] += total
-        totals[label + ":hit"] += hit
+        totals[label + ":full"] += full
+        totals[label + ":partial"] += partial
 
     line_total = sum(r[1] for r in rows)
-    line_hit = sum(r[2] for r in rows)
+    line_full = sum(r[2] for r in rows)
+    line_partial = sum(r[3] for r in rows)
     branch_total = sum(len(b) for b in branches.values())
     branch_hit = sum(sum(b.values()) for b in branches.values())
-    return rows, totals, line_total, line_hit, branch_total, branch_hit
+    return rows, totals, line_total, line_full, line_partial, branch_total, branch_hit
 
 
 def write_xml(path, lines, branches, root):
@@ -262,60 +290,82 @@ def main():
     print(f"using {args.gcov}: {gcov_version(args.gcov)}")
     count = run_gcov(args.build_dir, report_dir, args.gcov)
     lines, branches = merge(report_dir, args.root)
-    rows, totals, l_total, l_hit, b_total, b_hit = table(lines, branches)
-    line_pct = 100.0 * l_hit / l_total if l_total else 100.0
+    rows, totals, l_total, l_full, l_partial, b_total, b_hit = table(lines, branches)
+    covered_pct = 100.0 * l_full / l_total if l_total else 100.0
+    executed_pct = 100.0 * (l_full + l_partial) / l_total if l_total else 100.0
     branch_pct = 100.0 * b_hit / b_total if b_total else 100.0
 
     print(f"merged {count} translation units\n")
-    print(f"{'file':<42}{'lines':>7}{'hit':>6}{'cover':>8}")
-    print("-" * 63)
-    for name, total, hit, pct in rows:
-        print(f"{name.replace(FILTER, ''):<42}{total:>7}{hit:>6}{pct:>7.1f}%")
+    print(f"{'file':<42}{'lines':>7}{'full':>6}{'part':>6}{'miss':>6}{'cover':>8}")
+    print("-" * 75)
+    for name, total, full, partial, missed in rows:
+        pct = 100.0 * full / total if total else 100.0
+        print(f"{name.replace(FILTER, ''):<42}{total:>7}{full:>6}{partial:>6}"
+              f"{missed:>6}{pct:>7.1f}%")
         if args.show_missing:
-            missing = sorted(n for n, c in lines[name].items() if not c)
-            if missing:
-                print(f"    uncovered: {', '.join(map(str, missing))}")
-    print("-" * 63)
+            never = sorted(n for n, c in lines[name].items() if not c)
+            if never:
+                print(f"    never executed: {', '.join(map(str, never))}")
+    print("-" * 75)
     for _prefix, label in GROUPS:
         total = totals[label + ":total"]
         if total:
-            hit = totals[label + ":hit"]
-            print(f"{label:<42}{total:>7}{hit:>6}{100.0 * hit / total:>7.1f}%")
-    print("-" * 63)
-    print(f"{'TOTAL lines':<42}{l_total:>7}{l_hit:>6}{line_pct:>7.1f}%")
-    print(f"{'TOTAL branches':<42}{b_total:>7}{b_hit:>6}{branch_pct:>7.1f}%")
+            full = totals[label + ":full"]
+            partial = totals[label + ":partial"]
+            print(f"{label:<42}{total:>7}{full:>6}{partial:>6}"
+                  f"{total - full - partial:>6}{100.0 * full / total:>7.1f}%")
+    print("-" * 75)
+    print(f"{'TOTAL (Codecov-comparable)':<42}{l_total:>7}{l_full:>6}{l_partial:>6}"
+          f"{l_total - l_full - l_partial:>6}{covered_pct:>7.1f}%")
+    print()
+    print(f"  lines fully covered  {l_full}/{l_total} = {covered_pct:.1f}%  "
+          "(every branch on the line taken; this is what Codecov shows)")
+    print(f"  lines executed       {l_full + l_partial}/{l_total} = {executed_pct:.1f}%  "
+          "(classic line coverage: ran at least once)")
+    print(f"  branches taken       {b_hit}/{b_total} = {branch_pct:.1f}%")
 
     if args.xml:
         write_xml(args.xml, lines, branches, args.root)
         print(f"\nwrote {args.xml}")
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as handle:
-            json.dump({"line_percent": round(line_pct, 2),
+            json.dump({"covered_percent": round(covered_pct, 2),
+                       "executed_percent": round(executed_pct, 2),
                        "branch_percent": round(branch_pct, 2),
-                       "lines_covered": l_hit, "lines_total": l_total,
+                       "lines_full": l_full, "lines_partial": l_partial,
+                       "lines_total": l_total,
                        "branches_covered": b_hit, "branches_total": b_total}, handle, indent=2)
         print(f"wrote {args.json_out}")
     if args.summary:
         with open(args.summary, "w", encoding="utf-8") as handle:
             handle.write("## Coverage\n\n")
-            handle.write(f"**Lines {line_pct:.1f}%** ({l_hit}/{l_total}) &nbsp;·&nbsp; "
-                         f"**Branches {branch_pct:.1f}%** ({b_hit}/{b_total})\n\n")
-            handle.write("| Layer | Lines | Covered | Coverage |\n|---|---:|---:|---:|\n")
+            handle.write(f"**{covered_pct:.1f}% covered** ({l_full}/{l_total} lines fully "
+                         f"covered) &nbsp;·&nbsp; {executed_pct:.1f}% executed "
+                         f"&nbsp;·&nbsp; {branch_pct:.1f}% branches\n\n")
+            handle.write("A line counts as covered only when every branch on it was taken, "
+                         "which is the figure Codecov reports.\n\n")
+            handle.write("| Layer | Lines | Full | Partial | Missed | Covered |\n"
+                         "|---|---:|---:|---:|---:|---:|\n")
             for _prefix, label in GROUPS:
                 total = totals[label + ":total"]
                 if total:
-                    hit = totals[label + ":hit"]
-                    handle.write(f"| {label} | {total} | {hit} | {100.0 * hit / total:.1f}% |\n")
+                    full = totals[label + ":full"]
+                    partial = totals[label + ":partial"]
+                    handle.write(f"| {label} | {total} | {full} | {partial} | "
+                                 f"{total - full - partial} | {100.0 * full / total:.1f}% |\n")
             handle.write("\n<details><summary>Per file</summary>\n\n")
-            handle.write("| File | Lines | Covered | Coverage |\n|---|---:|---:|---:|\n")
-            for name, total, hit, pct in rows:
-                handle.write(f"| `{name.replace(FILTER, '')}` | {total} | {hit} | {pct:.1f}% |\n")
+            handle.write("| File | Lines | Full | Partial | Missed | Covered |\n"
+                         "|---|---:|---:|---:|---:|---:|\n")
+            for name, total, full, partial, missed in rows:
+                pct = 100.0 * full / total if total else 100.0
+                handle.write(f"| `{name.replace(FILTER, '')}` | {total} | {full} | "
+                             f"{partial} | {missed} | {pct:.1f}% |\n")
             handle.write("\n</details>\n")
         print(f"wrote {args.summary}")
 
     failed = False
-    if line_pct + 1e-9 < args.fail_under_line:
-        print(f"\n::error::line coverage {line_pct:.1f}% is below the "
+    if covered_pct + 1e-9 < args.fail_under_line:
+        print(f"\n::error::covered lines {covered_pct:.1f}% is below the "
               f"{args.fail_under_line:.1f}% floor")
         failed = True
     if branch_pct + 1e-9 < args.fail_under_branch:
