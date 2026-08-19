@@ -16,7 +16,9 @@
 //     (refused: anonymous connections are not authorized)
 //
 // SPDX-License-Identifier: MIT
+#include <cerrno>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -40,6 +42,18 @@ void on_signal(int) {
     transport.stop();
 }
 
+// Strict port parsing; see tcp_broker.cpp for why atol() is not enough.
+bool parse_port(const char* text, uint16_t& out) {
+    errno = 0;
+    char* end = nullptr;
+    const long value = std::strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value < 1 || value > 65535) {
+        return false;
+    }
+    out = static_cast<uint16_t>(value);
+    return true;
+}
+
 bool configure_acl(Acl& acl) {
     // In a real deployment, load these from provisioning data instead
     // of hard-coding them.
@@ -54,9 +68,9 @@ bool configure_acl(Acl& acl) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const long port_arg = argc > 1 ? std::atol(argv[1]) : 1883;
-    if (port_arg < 1 || port_arg > 65535) {
-        std::fprintf(stderr, "usage: %s [port]\n", argv[0]);
+    uint16_t port = 1883;
+    if (argc > 1 && !parse_port(argv[1], port)) {
+        std::fprintf(stderr, "usage: %s [port]   (1-65535)\n", argv[0]);
         return 1;
     }
 
@@ -68,8 +82,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "tcp_broker_acl: ACL tables too small\n");
         return 1;
     }
-    if (!transport.open(static_cast<uint16_t>(port_arg))) {
-        std::fprintf(stderr, "tcp_broker_acl: cannot listen on port %ld\n", port_arg);
+    if (!transport.open(port)) {
+        std::fprintf(stderr, "tcp_broker_acl: cannot listen on port %u\n", port);
         return 1;
     }
     std::printf("tcp_broker_acl: broker with ACLs on port %u (users: sensor-1, sensor-2, "

@@ -8,6 +8,7 @@
 #include <minimosq/transports/posix/tcp.hpp>
 
 #include <arpa/inet.h>
+#include <cerrno>
 #include <csignal>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -57,13 +58,18 @@ struct Client {
     }
 
     void send_pkt(const wire::Pkt& p) {
+        // See test_transport_uds.cpp: a dead fd would spin forever here.
+        CHECK(fd >= 0);
         size_t off = 0;
-        while (off < p.len) {
+        while (fd >= 0 && off < p.len) {
             const ssize_t w = ::send(fd, p.data + off, p.len - off, MSG_NOSIGNAL);
             if (w > 0) {
                 off += static_cast<size_t>(w);
+            } else if (w < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+                break;
             }
         }
+        CHECK(off == p.len);
     }
 
     // Read whatever is available right now.

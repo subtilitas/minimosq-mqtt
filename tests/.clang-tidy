@@ -1,0 +1,31 @@
+# clang-tidy overrides for the test suite.
+#
+# Inherits the root .clang-tidy (InheritParentConfig) and relaxes a few
+# checks that are about production-code style rather than correctness.
+# The tests exist to exercise the library through deliberately awkward
+# inputs, and the diagnostics these checks produce inside test bodies do
+# not point at defects.
+#
+# Anything that could indicate a real bug — bugprone-*, cert-*,
+# clang-analyzer-*, performance-*, portability-* — stays enabled here.
+
+InheritParentConfig: true
+
+Checks: >
+  -misc-const-correctness,
+  -bugprone-derived-method-shadowing-base-method
+
+# Rationale:
+#
+#   misc-const-correctness
+#       Wants `const` on essentially every local in a test body. The
+#       tests are short, linear, and read top to bottom; the annotations
+#       add noise without adding information.
+#
+#   bugprone-derived-method-shadowing-base-method
+#       Test security policies derive from AllowAllSecurity and replace
+#       one hook while inheriting the rest — RecordingSecurity overrides
+#       authenticate() and keeps the permissive authorize_* methods.
+#       That is exactly how the policy interface is meant to be extended:
+#       it is a compile-time policy, never called through a base
+#       reference, so there is no virtual dispatch to get wrong.

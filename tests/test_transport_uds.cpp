@@ -6,6 +6,7 @@
 #include <minimosq/broker/broker.hpp>
 #include <minimosq/transports/posix/unix_socket.hpp>
 
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <sys/socket.h>
@@ -52,13 +53,19 @@ int connect_client(const char* path) {
 }
 
 void send_all(int fd, ByteSpan b) {
+    // A failed connect() yields fd == -1; without this guard ::send keeps
+    // failing, off never advances, and the test hangs instead of failing.
+    CHECK(fd >= 0);
     size_t off = 0;
-    while (off < b.len) {
+    while (fd >= 0 && off < b.len) {
         const ssize_t w = ::send(fd, b.data + off, b.len - off, MSG_NOSIGNAL);
         if (w > 0) {
             off += static_cast<size_t>(w);
+        } else if (w < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+            break;  // fatal: let the CHECK below report it
         }
     }
+    CHECK(off == b.len);
 }
 
 // Pump the loop until a complete packet arrives on fd.

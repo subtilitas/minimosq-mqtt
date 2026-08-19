@@ -206,6 +206,7 @@ TEST(context_refreshed_on_reconnect) {
 // A policy whose subscribe check is stricter than its receive check —
 // the shape that exposed the retained-replay bypass. Real examples: a
 // wildcard-subscription ban, or a per-filter subscription quota.
+namespace {
 struct StricterSubscribeSecurity {
     struct Context {
         int unused = 0;
@@ -219,6 +220,7 @@ struct StricterSubscribeSecurity {
     bool authorize_subscribe(const Context&, StrView) { return allow_subscribe; }
     bool authorize_receive(const Context&, StrView) { return true; }
 };
+}  // namespace
 
 TEST(refused_resubscribe_does_not_replay_retained_messages) {
     bt::BedT<StricterSubscribeSecurity> x;

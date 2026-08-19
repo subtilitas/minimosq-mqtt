@@ -260,9 +260,11 @@ TEST(clean_session_frees_the_slot_on_disconnect) {
 // Same as SmallTraits but with idle reclamation enabled, so a client
 // that asks for keep-alive 0 and then goes quiet does not hold its
 // connection and session slot forever.
+namespace {
 struct IdleTraits : bt::SmallTraits {
     static constexpr uint32_t max_idle_ms = 30000;
 };
+}  // namespace
 
 TEST(zero_keepalive_is_reclaimed_when_max_idle_is_set) {
     struct Fixture {

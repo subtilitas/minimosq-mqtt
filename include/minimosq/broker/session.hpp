@@ -93,7 +93,7 @@ struct Session {
     }
 
     bool has_inbound_qos2(uint16_t id) const noexcept {
-        for (uint16_t v : inbound_qos2) {
+        for (const uint16_t v : inbound_qos2) {
             if (v == id) {
                 return true;
             }

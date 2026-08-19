@@ -28,8 +28,8 @@ inline bool utf8_valid(StrView s) noexcept {
             i += 1;
             continue;
         }
-        size_t cont;  // number of continuation bytes
-        uint32_t cp;  // code point being decoded
+        size_t cont = 0;  // number of continuation bytes
+        uint32_t cp = 0;  // code point being decoded
         if ((c & 0xE0) == 0xC0) {
             cont = 1;
             cp = c & 0x1Fu;

@@ -57,6 +57,11 @@ namespace minimosq {
 struct NullTlsEngine {
     void reset() noexcept {}
 
+    // `cipher` is an out parameter of the Engine interface — a real TLS
+    // engine writes its handshake and alert records there. This
+    // pass-through engine has none to emit, but the signature has to
+    // match the contract, so it cannot become a pointer to const.
+    // NOLINTBEGIN(readability-non-const-parameter)
     bool on_ciphertext(ByteSpan in, uint8_t* plain, size_t plain_cap, size_t& plain_len,
                        uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) noexcept {
         (void)cipher;
@@ -71,6 +76,7 @@ struct NullTlsEngine {
         plain_len = in.len;
         return true;
     }
+    // NOLINTEND(readability-non-const-parameter)
 
     bool encrypt(ByteSpan plain, uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) noexcept {
         if (plain.len > cipher_cap) {
