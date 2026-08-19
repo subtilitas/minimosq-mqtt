@@ -96,6 +96,62 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --build-config Release --output-on-failure
 
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # -O0 keeps gcov line attribution honest; inlining at -O2 smears
+      # header lines across call sites and inflates the result.
+      - name: Configure with coverage instrumentation
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="--coverage -O0 -g"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      # tools/coverage.py merges per-instantiation gcov records instead
+      # of summing them; see the comment at the top of that file for why
+      # a plain gcovr run reports roughly 58% for this codebase.
+      - name: Measure coverage
+        run: >
+          python3 tools/coverage.py
+          --build-dir build
+          --xml coverage.xml
+          --summary "$GITHUB_STEP_SUMMARY"
+          --json coverage.json
+          --show-missing
+          --fail-under-line 90
+          --fail-under-branch 78
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: ./coverage.xml
+          flags: headers
+          name: minimosq-headers
+          # Public-repo uploads work without a token; the secret is used
+          # when present so pushes to a protected branch are accepted.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # The floor above is the real gate. A Codecov outage should not
+          # fail a build that met it.
+          fail_ci_if_error: false
+
+      - name: Keep the report as an artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            coverage.xml
+            coverage.json
+
   smoke:
     name: mosquitto smoke test
     runs-on: ubuntu-latest

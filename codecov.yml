@@ -1,0 +1,35 @@
+# Codecov configuration.
+#
+# The uploaded report comes from tools/coverage.py, which merges gcov
+# records across translation units and template instantiations. Do not
+# replace it with a raw gcovr upload: this project is header-only and
+# templated, so unmerged records report roughly 58% instead of 91%.
+
+coverage:
+  precision: 1
+  round: nearest
+  range: "80...95"
+
+  status:
+    project:
+      default:
+        # Mirrors the --fail-under-line floor in .github/workflows/ci.yml.
+        target: 90%
+        threshold: 1%
+    patch:
+      default:
+        # New and changed lines should arrive tested.
+        target: 90%
+        threshold: 5%
+
+# Only the shipped library is measured. Tests and examples are the thing
+# doing the measuring, and counting them flatters the number.
+ignore:
+  - "tests/**"
+  - "examples/**"
+  - "tools/**"
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: true
