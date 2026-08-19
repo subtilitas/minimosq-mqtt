@@ -139,7 +139,8 @@ TEST(parse_publish_rejects_bad_flags) {
 }
 
 TEST(parse_publish_rejects_zero_packet_id) {
-    const wire::Pkt pkt = wire::make_publish("a", wire::bs("x"), QoS::at_least_once, false, false, 0);
+    const wire::Pkt pkt =
+        wire::make_publish("a", wire::bs("x"), QoS::at_least_once, false, false, 0);
     PublishPacket p;
     CHECK(parse_publish(pkt.data[0], wire::body_of(pkt), p) == Err::malformed);
 }
@@ -240,8 +241,8 @@ TEST(build_connack_bytes) {
 
 TEST(build_publish_bytes) {
     uint8_t buf[64];
-    const ByteSpan pkt = build_publish(buf, sizeof buf, "a/b", wire::bs("hi"),
-                                       QoS::at_least_once, true, false, 0x0102);
+    const ByteSpan pkt = build_publish(buf, sizeof buf, "a/b", wire::bs("hi"), QoS::at_least_once,
+                                       true, false, 0x0102);
     // 0x33 = PUBLISH | qos1<<1 | retain; body: len(2)+topic(3)+id(2)+payload(2) = 9
     const uint8_t expect[] = {0x33, 0x09, 0x00, 0x03, 'a', '/', 'b', 0x01, 0x02, 'h', 'i'};
     CHECK(pkt == ByteSpan(expect, sizeof expect));
@@ -293,13 +294,12 @@ TEST(frame_packet_rejects_a_body_it_cannot_describe) {
     // writes nothing; frame_packet must not hand back a span describing
     // bytes that were never written.
     uint8_t buf[64] = {0};
-    CHECK(frame_packet(buf, make_first_byte(PacketType::publish, 0),
-                       max_remaining_length + 1)
+    CHECK(frame_packet(buf, make_first_byte(PacketType::publish, 0), max_remaining_length + 1)
               .empty());
 
     // The largest expressible body is still accepted.
-    const ByteSpan ok = frame_packet(buf, make_first_byte(PacketType::publish, 0),
-                                     max_remaining_length);
+    const ByteSpan ok =
+        frame_packet(buf, make_first_byte(PacketType::publish, 0), max_remaining_length);
     CHECK(!ok.empty());
     CHECK_EQ(ok.len, 1u + 4u + max_remaining_length);
 }

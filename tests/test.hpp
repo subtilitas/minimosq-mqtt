@@ -76,7 +76,7 @@ inline int run_all() {
     return 1;
 }
 
-} // namespace minitest
+}  // namespace minitest
 
 #define TEST(name)                                                                                 \
     static void minitest_fn_##name();                                                              \
@@ -99,4 +99,4 @@ int main() {
 }
 #endif
 
-#endif // MINIMOSQ_TESTS_TEST_HPP
+#endif  // MINIMOSQ_TESTS_TEST_HPP

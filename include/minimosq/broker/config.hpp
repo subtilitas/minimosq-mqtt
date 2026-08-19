@@ -75,6 +75,6 @@ struct DefaultTraits {
     static constexpr uint32_t max_idle_ms = 0;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_BROKER_CONFIG_HPP
+#endif  // MINIMOSQ_BROKER_CONFIG_HPP

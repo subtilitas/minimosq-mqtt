@@ -68,6 +68,6 @@ public:
     }
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TRANSPORTS_POSIX_TCP_HPP
+#endif  // MINIMOSQ_TRANSPORTS_POSIX_TCP_HPP

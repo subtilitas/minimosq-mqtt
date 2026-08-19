@@ -65,6 +65,6 @@ struct NullTransport {
     void close(size_t conn) noexcept { (void)conn; }
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TRANSPORT_HPP
+#endif  // MINIMOSQ_TRANSPORT_HPP

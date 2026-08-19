@@ -125,7 +125,7 @@ struct RecordingSecurity : minimosq::AllowAllSecurity {
         return minimosq::ConnackCode::accepted;
     }
 };
-} // namespace
+}  // namespace
 
 TEST(auth_policy_is_consulted) {
     BedT<RecordingSecurity> x;

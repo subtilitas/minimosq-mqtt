@@ -73,6 +73,6 @@ private:
     size_t len_ = 0;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TRANSPORTS_POSIX_COMMON_HPP
+#endif  // MINIMOSQ_TRANSPORTS_POSIX_COMMON_HPP

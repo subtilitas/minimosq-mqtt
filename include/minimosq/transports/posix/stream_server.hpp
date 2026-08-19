@@ -107,8 +107,7 @@ public:
         // listener stays readable forever; pause it briefly instead of
         // busy-spinning the loop.
         const bool listener_paused =
-            accept_backoff_armed_ &&
-            static_cast<int32_t>(posix_now_ms() - accept_retry_at_ms_) < 0;
+            accept_backoff_armed_ && static_cast<int32_t>(posix_now_ms() - accept_retry_at_ms_) < 0;
         if (listen_fd_ >= 0 && !listener_paused) {
             pfds[n].fd = listen_fd_;
             pfds[n].events = POLLIN;
@@ -264,6 +263,6 @@ private:
     volatile sig_atomic_t running_ = 1;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TRANSPORTS_POSIX_STREAM_SERVER_HPP
+#endif  // MINIMOSQ_TRANSPORTS_POSIX_STREAM_SERVER_HPP

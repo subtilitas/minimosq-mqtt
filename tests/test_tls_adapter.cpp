@@ -25,8 +25,7 @@ TEST(tls_adapter_passes_mqtt_through) {
     const uint8_t codes[] = {0x00};
     expect_suback(raw, 0, 1, codes);
 
-    CHECK(driver.conn_data(0, wire::make_publish("t", wire::bs("sealed")).span(), 1000) ==
-          Err::ok);
+    CHECK(driver.conn_data(0, wire::make_publish("t", wire::bs("sealed")).span(), 1000) == Err::ok);
     expect_publish(raw, 0, "t", wire::bs("sealed"), QoS::at_most_once, false);
     expect_silence(raw, 0);
 

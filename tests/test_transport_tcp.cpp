@@ -123,7 +123,7 @@ bool wait_packet(Transport& t, B& b, Client& c, uint8_t& fb, ByteSpan& body) {
     return false;
 }
 
-} // namespace
+}  // namespace
 
 TEST(tcp_end_to_end_pubsub) {
     std::signal(SIGPIPE, SIG_IGN);
@@ -154,8 +154,8 @@ TEST(tcp_end_to_end_pubsub) {
     CHECK(wait_packet(t, b, sub, fb, body));
     CHECK(packet_type(fb) == PacketType::suback);
 
-    pub.send_pkt(wire::make_publish("demo/x", wire::bs("over-tcp"), QoS::at_least_once, false,
-                                    false, 21));
+    pub.send_pkt(
+        wire::make_publish("demo/x", wire::bs("over-tcp"), QoS::at_least_once, false, false, 21));
     CHECK(wait_packet(t, b, pub, fb, body));
     CHECK(packet_type(fb) == PacketType::puback);
 
@@ -216,8 +216,7 @@ TEST(transport_publishes_its_capacity) {
     // Broker static_asserts against this, which is what stops a
     // mis-sized transport becoming an out-of-bounds write.
     static_assert(TcpTransport<4>::max_connections == 4, "capacity must be visible");
-    static_assert(transport_max_connections<TcpTransport<4>>::value == 4,
-                  "the probe must see it");
+    static_assert(transport_max_connections<TcpTransport<4>>::value == 4, "the probe must see it");
     struct Unsized {};  // a transport that does not publish a capacity
     static_assert(transport_max_connections<Unsized>::value == 0,
                   "an unsized transport reads as 0 and is left to the author");
@@ -228,9 +227,9 @@ TEST(out_of_range_connection_index_is_refused_not_written) {
     CHECK(t.open(0, "127.0.0.1"));
 
     const uint8_t byte = 0x42;
-    CHECK(!t.send(2, ByteSpan{&byte, 1}));    // == MaxConns
-    CHECK(!t.send(99, ByteSpan{&byte, 1}));   // far past it
-    t.close(2);                               // must not touch slots_
+    CHECK(!t.send(2, ByteSpan{&byte, 1}));   // == MaxConns
+    CHECK(!t.send(99, ByteSpan{&byte, 1}));  // far past it
+    t.close(2);                              // must not touch slots_
     t.close(99);
 
     // In-range but unopened slots are refused on their own merits.

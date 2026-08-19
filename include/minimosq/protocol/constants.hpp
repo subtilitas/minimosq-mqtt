@@ -46,8 +46,8 @@ enum class ConnackCode : uint8_t {
     not_authorized = 5,
 };
 
-constexpr uint8_t protocol_level_311 = 4;      // [MQTT-3.1.2.2]
-constexpr uint8_t suback_failure = 0x80;       // SUBACK "Failure" return code
+constexpr uint8_t protocol_level_311 = 4;             // [MQTT-3.1.2.2]
+constexpr uint8_t suback_failure = 0x80;              // SUBACK "Failure" return code
 constexpr uint32_t max_remaining_length = 268435455;  // [MQTT-2.2.3]
 constexpr uint16_t max_utf8_len = 0xFFFF;
 
@@ -81,7 +81,7 @@ constexpr uint8_t will_qos_mask = 0x18;
 constexpr uint8_t will_retain = 0x20;
 constexpr uint8_t password = 0x40;
 constexpr uint8_t username = 0x80;
-} // namespace connect_flags
+}  // namespace connect_flags
 
 // Number of bytes the Remaining Length varint needs for value v.
 constexpr size_t varint_size(uint32_t v) noexcept {
@@ -99,6 +99,6 @@ constexpr bool fixed_flags_valid(PacketType t, uint8_t flags) noexcept {
     return flags == 0x00;
 }
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_PROTOCOL_CONSTANTS_HPP
+#endif  // MINIMOSQ_PROTOCOL_CONSTANTS_HPP

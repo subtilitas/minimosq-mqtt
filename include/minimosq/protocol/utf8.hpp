@@ -28,8 +28,8 @@ inline bool utf8_valid(StrView s) noexcept {
             i += 1;
             continue;
         }
-        size_t cont;      // number of continuation bytes
-        uint32_t cp;      // code point being decoded
+        size_t cont;  // number of continuation bytes
+        uint32_t cp;  // code point being decoded
         if ((c & 0xE0) == 0xC0) {
             cont = 1;
             cp = c & 0x1Fu;
@@ -52,8 +52,7 @@ inline bool utf8_valid(StrView s) noexcept {
             }
             cp = (cp << 6) | (b & 0x3Fu);
         }
-        if ((cont == 1 && cp < 0x80) || (cont == 2 && cp < 0x800) ||
-            (cont == 3 && cp < 0x10000)) {
+        if ((cont == 1 && cp < 0x80) || (cont == 2 && cp < 0x800) || (cont == 3 && cp < 0x10000)) {
             return false;  // overlong encoding
         }
         if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
@@ -64,6 +63,6 @@ inline bool utf8_valid(StrView s) noexcept {
     return true;
 }
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_PROTOCOL_UTF8_HPP
+#endif  // MINIMOSQ_PROTOCOL_UTF8_HPP

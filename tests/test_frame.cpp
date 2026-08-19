@@ -31,7 +31,7 @@ struct Sink {
     }
 };
 
-} // namespace
+}  // namespace
 
 TEST(frame_single_packet) {
     FrameParser<512> fp;

@@ -88,8 +88,8 @@ TEST(varint_boundaries) {
     CHECK_EQ(varint_size(2097152), 4u);
     CHECK_EQ(varint_size(max_remaining_length), 4u);
 
-    const uint32_t samples[] = {0, 1, 127, 128, 321, 16383, 16384, 2097151, 2097152,
-                                max_remaining_length};
+    const uint32_t samples[] = {0,     1,     127,     128,     321,
+                                16383, 16384, 2097151, 2097152, max_remaining_length};
     for (uint32_t v : samples) {
         uint8_t buf[8];
         Writer w{buf, sizeof buf};

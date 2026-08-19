@@ -81,7 +81,7 @@ bool wait_packet(Transport& t, B& b, int fd, uint8_t* buf, size_t cap, size_t& g
     return false;
 }
 
-} // namespace
+}  // namespace
 
 TEST(uds_end_to_end_pubsub) {
     std::signal(SIGPIPE, SIG_IGN);
@@ -131,7 +131,7 @@ TEST(uds_socket_is_created_with_restrictive_permissions) {
     Transport t;
     CHECK(t.open(path));
 
-    struct stat st{};
+    struct stat st {};
     CHECK_EQ(::stat(path, &st), 0);
     // Default 0600: nothing for group or other. The whole security
     // story of this transport is filesystem permissions, so inheriting
@@ -147,7 +147,7 @@ TEST(uds_socket_mode_is_configurable) {
     Transport t;
     CHECK(t.open(path, 0660));
 
-    struct stat st{};
+    struct stat st {};
     CHECK_EQ(::stat(path, &st), 0);
     CHECK_EQ(static_cast<int>(st.st_mode & 0777), 0660);
 }

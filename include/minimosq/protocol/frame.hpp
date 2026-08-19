@@ -108,6 +108,6 @@ private:
     uint8_t len_shift_ = 0;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_PROTOCOL_FRAME_HPP
+#endif  // MINIMOSQ_PROTOCOL_FRAME_HPP

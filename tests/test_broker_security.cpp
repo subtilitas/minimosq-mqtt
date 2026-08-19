@@ -66,7 +66,7 @@ void connect_role(SecBed& x, size_t ci, const char* id, const char* role) {
     x.t.next(ci);  // drain CONNACK
 }
 
-} // namespace
+}  // namespace
 
 TEST(unauthorized_publish_dropped_but_acked) {
     SecBed x;

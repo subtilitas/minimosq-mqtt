@@ -91,6 +91,6 @@ private:
     bool ok_ = true;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_PROTOCOL_WRITER_HPP
+#endif  // MINIMOSQ_PROTOCOL_WRITER_HPP

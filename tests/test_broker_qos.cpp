@@ -22,7 +22,7 @@ wire::ConnectOpts persistent() {
     o.clean = false;
     return o;
 }
-} // namespace
+}  // namespace
 
 TEST(qos1_delivery_and_puback) {
     Bed x;
@@ -244,8 +244,8 @@ TEST(oversize_payload_skips_stored_delivery_only) {
     for (size_t i = 0; i < sizeof big; ++i) {
         big[i] = static_cast<uint8_t>(i);
     }
-    x.feed(0, wire::make_publish("t", ByteSpan{big, sizeof big}, QoS::at_least_once, false,
-                                 false, 8));
+    x.feed(0,
+           wire::make_publish("t", ByteSpan{big, sizeof big}, QoS::at_least_once, false, false, 8));
     x.t.next(0);  // PUBACK
     // QoS 0 subscriber gets the pass-through copy...
     expect_publish(x.t, 1, "t", ByteSpan{big, sizeof big}, QoS::at_most_once, false);

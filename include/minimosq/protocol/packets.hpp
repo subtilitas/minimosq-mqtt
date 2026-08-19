@@ -66,8 +66,8 @@ inline Err parse_connect(ByteSpan body, ConnectPacket& out) {
     out.has_username = (flags & connect_flags::username) != 0;
     out.has_password = (flags & connect_flags::password) != 0;
 
-    const uint8_t will_qos_raw =
-        static_cast<uint8_t>((flags & connect_flags::will_qos_mask) >> connect_flags::will_qos_shift);
+    const uint8_t will_qos_raw = static_cast<uint8_t>((flags & connect_flags::will_qos_mask) >>
+                                                      connect_flags::will_qos_shift);
     if (will_qos_raw > 2) {
         return Err::malformed;  // [MQTT-3.1.2-14]
     }
@@ -305,6 +305,6 @@ inline ByteSpan build_pingresp(uint8_t* buf, size_t cap) {
     return ByteSpan{buf, 2};
 }
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_PROTOCOL_PACKETS_HPP
+#endif  // MINIMOSQ_PROTOCOL_PACKETS_HPP

@@ -132,8 +132,7 @@ struct Session {
     // First pending entry with a given id in one of the given states.
     OutMsg* find_pending(uint16_t id, OutState a, OutState b, size_t* index) noexcept {
         for (size_t i = 0; i < pending.size(); ++i) {
-            if (pending[i].packet_id == id &&
-                (pending[i].state == a || pending[i].state == b)) {
+            if (pending[i].packet_id == id && (pending[i].state == a || pending[i].state == b)) {
                 if (index != nullptr) {
                     *index = i;
                 }
@@ -144,6 +143,6 @@ struct Session {
     }
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_BROKER_SESSION_HPP
+#endif  // MINIMOSQ_BROKER_SESSION_HPP

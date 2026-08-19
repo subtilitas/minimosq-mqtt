@@ -52,7 +52,7 @@ struct Probe {
     Probe& operator=(const Probe&) = default;
     ~Probe() { --live_probes; }
 };
-} // namespace
+}  // namespace
 
 TEST(static_vector_push_to_capacity) {
     StaticVector<int, 3> v;
@@ -228,7 +228,7 @@ TEST(static_vector_remove_out_of_range_is_a_noop) {
     CHECK(v.push_back(1));
     CHECK(v.push_back(2));
 
-    v.remove_ordered(2);    // == size
+    v.remove_ordered(2);     // == size
     v.remove_unordered(99);  // way past the end
     CHECK_EQ(v.size(), 2u);
     CHECK_EQ(v[0], 1);

@@ -195,6 +195,6 @@ private:
     volatile sig_atomic_t running_ = 1;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TRANSPORTS_POSIX_PIPE_HPP
+#endif  // MINIMOSQ_TRANSPORTS_POSIX_PIPE_HPP

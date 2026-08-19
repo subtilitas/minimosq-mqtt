@@ -49,7 +49,7 @@ int open_fifo(const char* path, int flags) {
     return ::open(path, flags | O_RDWR | O_NONBLOCK);
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
     const char* in_path = argc > 1 ? argv[1] : "/tmp/minimosq.in";

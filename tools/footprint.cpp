@@ -80,7 +80,7 @@ void report(const char* name) {
                 sizeof(Broker<Traits, NullTransport>));
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     report<MinimalTraits>("Minimal");

@@ -9,3 +9,6 @@ DerivePointerAlignment: false
 AllowShortFunctionsOnASingleLine: Inline
 AlwaysBreakTemplateDeclarations: Yes
 SpacesBeforeTrailingComments: 2
+# LLVM's -2 combined with IndentWidth 4 would indent access specifiers
+# by two columns; this repository writes them flush left.
+AccessModifierOffset: -4

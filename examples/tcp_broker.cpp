@@ -29,7 +29,7 @@ void on_signal(int) {
     transport.stop();
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
     const long port_arg = argc > 1 ? std::atol(argv[1]) : 1883;
@@ -48,8 +48,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::printf("tcp_broker: MQTT 3.1.1 broker listening on port %u\n", transport.port());
-    std::printf("tcp_broker: broker state is %zu bytes, statically allocated\n",
-                sizeof broker);
+    std::printf("tcp_broker: broker state is %zu bytes, statically allocated\n", sizeof broker);
 
     transport.run(broker);
     std::printf("tcp_broker: shutting down\n");
