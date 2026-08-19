@@ -1,0 +1,10 @@
+# Commits that are pure formatting, skipped by `git blame`.
+#
+# Enable locally with:
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub picks this file up automatically for its blame view.
+
+# style: apply clang-format to the whole tree
+# .clang-format had never been enforced; 48 of 49 files differed.
+ee8ded5d7206819d7e54c442aef40f57c7054968
