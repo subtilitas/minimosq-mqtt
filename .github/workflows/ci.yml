@@ -3,7 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+    # Tags are covered too: release.yml re-runs the build and sanitizer
+    # jobs for a tag, but not coverage, and a tag push does not match a
+    # branch filter. Without this, tagging a release runs no CI at all.
+    tags: ['v*']
   pull_request:
+  # So the suite (and the coverage upload with it) can be run on demand
+  # without inventing a commit.
+  workflow_dispatch:
 
 jobs:
   build-test:

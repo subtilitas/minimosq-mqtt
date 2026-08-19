@@ -100,10 +100,19 @@ jobs:
         run: |
           set -eu
           CMAKE_VERSION="$(sed -n 's/^project(minimosq VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          TAG="${{ steps.tag.outputs.tag }}"
           TAG_CORE="${{ steps.tag.outputs.core }}"
           if [ "$CMAKE_VERSION" != "$TAG_CORE" ]; then
-            echo "::error::Tag ${{ steps.tag.outputs.tag }} does not match" \
-                 "project(minimosq VERSION $CMAKE_VERSION) in CMakeLists.txt."
+            echo "::error::Tag $TAG expects version $TAG_CORE, but the commit it" \
+                 "points at has project(minimosq VERSION $CMAKE_VERSION)."
+            echo ""
+            echo "This job builds the *tagged commit*, so bumping CMakeLists.txt on"
+            echo "main afterwards will not fix it — the tag still points at the old"
+            echo "commit, and re-running this workflow will fail again. Move the tag:"
+            echo ""
+            echo "  git tag -d $TAG && git push origin :refs/tags/$TAG"
+            echo "  # set project(minimosq VERSION $TAG_CORE ...) in CMakeLists.txt, commit"
+            echo "  git tag -a $TAG -m \"minimosq $TAG\" && git push origin $TAG"
             exit 1
           fi
           echo "Version $TAG_CORE matches CMakeLists.txt."
