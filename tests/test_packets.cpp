@@ -193,7 +193,7 @@ TEST(topic_list_empty_is_malformed) {
     const wire::Pkt pkt = wire::make_subscribe(7, {});
     TopicListParser p{wire::body_of(pkt), true};
     StrView f;
-    QoS q;
+    QoS q = QoS::at_most_once;
     CHECK(!p.next(f, q));
     CHECK(p.status() == Err::malformed);  // [MQTT-3.8.3-3]
 }
@@ -202,7 +202,7 @@ TEST(topic_list_bad_qos_is_malformed) {
     const wire::Pkt pkt = wire::make_subscribe(7, {{"a", 3}});
     TopicListParser p{wire::body_of(pkt), true};
     StrView f;
-    QoS q;
+    QoS q = QoS::at_most_once;
     CHECK(!p.next(f, q));
     CHECK(p.status() == Err::malformed);
 }
@@ -217,7 +217,7 @@ TEST(topic_list_unsubscribe_iteration) {
     const wire::Pkt pkt = wire::make_unsubscribe(9, {"x", "y/z"});
     TopicListParser p{wire::body_of(pkt), false};
     StrView f;
-    QoS q;
+    QoS q = QoS::at_most_once;
     CHECK(p.next(f, q));
     CHECK(f == StrView("x"));
     CHECK(p.next(f, q));

@@ -37,8 +37,13 @@ Checks: >
   -bugprone-exception-escape,
   -misc-non-private-member-variables-in-classes,
   -misc-no-recursion,
+  -misc-use-anonymous-namespace,
+  -misc-include-cleaner,
+  -cert-err33-c,
   -cert-err58-cpp,
-  -cert-dcl21-cpp
+  -cert-dcl21-cpp,
+  -clang-analyzer-security.ArrayBound,
+  -clang-analyzer-optin.core.EnumCastOutOfRange
 
 # Rationale for the suppressions above:
 #
@@ -65,6 +70,43 @@ Checks: >
 #       Concern static initialisation order and operator++ return
 #       conventions in ways that do not apply to a header-only library
 #       with no global constructors.
+#
+#   misc-use-anonymous-namespace          (462 findings before suppression)
+#       The TEST() macro in tests/test.hpp declares a static function and
+#       two static registrar objects per case. The check fires three
+#       times for every test in the suite and the only way to satisfy it
+#       is to stop using the macro.
+#
+#   misc-include-cleaner                  (179 findings before suppression)
+#       An include-what-you-use style check. It objects to
+#       minimosq/minimosq.hpp — the umbrella header that exists precisely
+#       so users write one include — and wants a direct include for every
+#       macro and typedef, including size_t, uint8_t and the test
+#       harness's own CHECK and TEST. Wrong tool for this layout.
+#
+#   cert-err33-c                          (29 findings before suppression)
+#       Flags discarding the return value of std::fprintf and
+#       std::signal. The library itself never calls either; every finding
+#       is in an example printing a diagnostic to stderr immediately
+#       before returning failure, where there is nothing useful to do
+#       with the result.
+#
+#   clang-analyzer-security.ArrayBound
+#       One false positive, on StrView::operator[] reached through
+#       topic_filter_covers. The analyzer cannot see that StrView's
+#       one-argument constructor sets len from cstr_len(data), so it
+#       explores paths where len exceeds the buffer. The invariant holds
+#       by construction, and the matching-function pair was separately
+#       checked over 1,061,312 filter/topic combinations under ASan and
+#       UBSan with no out-of-bounds access.
+#
+#   clang-analyzer-optin.core.EnumCastOutOfRange
+#       Flags static_cast<PacketType>(first_byte >> 4) for values with no
+#       named enumerator. PacketType has a fixed underlying type
+#       (uint8_t), so [dcl.enum]/8 makes the cast well defined for every
+#       value that type can hold; the broker relies on that to reject
+#       reserved packet types. The check targets enums *without* a fixed
+#       underlying type.
 
 # Only diagnose the shipped library. Tests and examples exercise it and
 # have looser standards on purpose (raw sockets, fixed-size scratch

@@ -155,7 +155,8 @@ TEST(pool_find) {
     *p.alloc() = 10;
     *p.alloc() = 20;
     int* hit = p.find([](int v) { return v == 20; });
-    CHECK(hit != nullptr && *hit == 20);
+    CHECK(hit != nullptr);
+    CHECK_EQ(*hit, 20);
     CHECK(p.find([](int v) { return v == 99; }) == nullptr);
 }
 

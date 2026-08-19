@@ -109,11 +109,20 @@ jobs:
   clang-tidy:
     name: clang-tidy
     runs-on: ubuntu-latest
+    env:
+      # Pinned for the same reason as clang-format: check sets and
+      # analyzer behaviour change between releases, and an unpinned tool
+      # turns the gate red on an image bump with no code change.
+      CLANG_TIDY_VERSION: 18.1.1
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install clang-tidy
-        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+      - name: Install a pinned clang-tidy
+        run: |
+          set -eu
+          pipx install "clang-tidy==${CLANG_TIDY_VERSION}" \
+            || pip install --user "clang-tidy==${CLANG_TIDY_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # clang-tidy needs to know how each file is compiled. The library
       # is header-only, so the headers are analysed through the test and

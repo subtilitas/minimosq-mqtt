@@ -126,7 +126,7 @@ public:
             ++n;
         }
 
-        int rc = ::poll(pfds, n, timeout_ms);
+        const int rc = ::poll(pfds, n, timeout_ms);
         const uint32_t now = posix_now_ms();
         if (rc < 0) {
             broker.tick(now);
@@ -142,7 +142,7 @@ public:
                 continue;
             }
             const size_t ci = slot_of[i];
-            Slot& s = slots_[ci];
+            const Slot& s = slots_[ci];
             if (s.fd != pfds[i].fd) {
                 continue;  // slot was closed/reused earlier in this loop
             }

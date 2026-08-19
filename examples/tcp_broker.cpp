@@ -10,7 +10,9 @@
 // transport live in static storage, sized entirely by BrokerTraits.
 //
 // SPDX-License-Identifier: MIT
+#include <cerrno>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -29,15 +31,28 @@ void on_signal(int) {
     transport.stop();
 }
 
+// Strict port parsing. atol() reports no error at all: it cannot tell
+// "0" from "abc", and it silently accepts trailing garbage, so "1883x"
+// would start a broker on 1883 rather than complain.
+bool parse_port(const char* text, uint16_t& out) {
+    errno = 0;
+    char* end = nullptr;
+    const long value = std::strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value < 1 || value > 65535) {
+        return false;
+    }
+    out = static_cast<uint16_t>(value);
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    const long port_arg = argc > 1 ? std::atol(argv[1]) : 1883;
-    if (port_arg < 1 || port_arg > 65535) {
-        std::fprintf(stderr, "usage: %s [port]\n", argv[0]);
+    uint16_t port = 1883;
+    if (argc > 1 && !parse_port(argv[1], port)) {
+        std::fprintf(stderr, "usage: %s [port]   (1-65535)\n", argv[0]);
         return 1;
     }
-    const auto port = static_cast<uint16_t>(port_arg);
 
     std::signal(SIGPIPE, SIG_IGN);
     std::signal(SIGINT, on_signal);
