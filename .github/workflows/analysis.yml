@@ -12,14 +12,15 @@ name: Analysis
 # `clang-format -i` over the tree, commit both together, and add the
 # commit to .git-blame-ignore-revs.
 #
-# clang-tidy and CodeQL are still reporting-only. Neither has been
-# triaged against this codebase yet, and a gate that goes red on day one
-# for reasons nobody has read just teaches everyone to ignore it.
-# To promote them:
-#   clang-tidy  fix or suppress what it reports, then delete the
-#               `|| true` in the "Run clang-tidy" step
-#   CodeQL      findings land in the Security tab; enable required
-#               code-scanning checks in branch protection
+# clang-tidy is also a gate, as of cf95e0d. Its first run reported 704
+# findings; 641 came from two checks that do not suit this codebase and
+# are suppressed with their reasoning in .clang-tidy, the rest were
+# fixed. The tree now reports zero against the pinned version, so any
+# finding is a new one.
+#
+# CodeQL stays reporting-only: its findings land in the Security tab
+# rather than in the log, and the way to make it blocking is to require
+# the code-scanning check in branch protection rather than to fail here.
 
 on:
   push:
@@ -149,6 +150,13 @@ jobs:
           count=$(wc -l < tidy-unique.log)
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "$count unique finding(s)"
+          # The tree is clean as of cf95e0d, so any finding is new. The
+          # summary step below still runs and prints them.
+          if [ "$count" -ne 0 ]; then
+            cat tidy-unique.log
+            echo "::error::clang-tidy reported $count finding(s)."
+            exit 1
+          fi
 
       - name: Publish the findings
         if: always()
@@ -160,8 +168,8 @@ jobs:
               echo "No findings."
             else
               echo "**${{ steps.tidy.outputs.count }} unique finding(s)**, deduplicated"
-              echo "across translation units. Non-blocking for now — see the"
-              echo "header comment in \`.github/workflows/analysis.yml\`."
+              echo "across translation units. The tree was clean as of cf95e0d,"
+              echo "so these are new."
               echo ""
               echo '```'
               head -100 tidy-unique.log
