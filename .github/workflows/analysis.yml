@@ -1,0 +1,190 @@
+name: Analysis
+
+# Static analysis, kept separate from ci.yml so a finding here never
+# looks like a build or test failure.
+#
+# All three jobs are non-blocking on first landing. None of these tools
+# has ever run against this codebase, so their output is unmeasured, and
+# a gate that goes red on day one for reasons nobody has read yet just
+# teaches everyone to ignore it.
+#
+# That includes clang-format: .clang-format has sat in the repository
+# without anything enforcing it, so the tree has never been checked
+# against it and almost certainly needs one mechanical pass.
+#
+# To turn each into a gate once its output has been triaged:
+#   clang-format  run `clang-format -i` over the tree once, then drop
+#                 `continue-on-error` from the format job
+#   clang-tidy    fix or suppress what it reports, then delete the
+#                 `|| true` in the "Run clang-tidy" step
+#   CodeQL        findings land in the Security tab; enable required
+#                 code-scanning checks in branch protection
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # CodeQL's query packs get updated independently of this repository,
+    # so a weekly run catches newly published queries against unchanged
+    # code. Monday 07:00 UTC.
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    continue-on-error: true   # see the header comment; blocking later
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+
+      - name: Check formatting
+        run: |
+          set -uo pipefail
+          clang-format --version
+          files=$(find include tests examples tools -type f \
+                    \( -name '*.hpp' -o -name '*.cpp' \) | sort)
+          echo "checking $(echo "$files" | wc -l) files against .clang-format"
+
+          # Report which files differ, and by how much, rather than just
+          # failing: the first run is expected to have work to do.
+          dirty=""
+          for f in $files; do
+            if ! clang-format --dry-run --Werror "$f" >/dev/null 2>&1; then
+              n=$(clang-format "$f" | diff -u "$f" - | grep -c '^[+-][^+-]' || true)
+              dirty="$dirty$f ($n lines)\n"
+            fi
+          done
+
+          {
+            echo "## clang-format"
+            echo ""
+            if [ -z "$dirty" ]; then
+              echo "All $(echo "$files" | wc -l) files match \`.clang-format\`."
+            else
+              echo "Files differing from \`.clang-format\`:"
+              echo ""
+              echo '```'
+              printf "%b" "$dirty"
+              echo '```'
+              echo ""
+              echo "Fix in one pass:"
+              echo ""
+              echo '```sh'
+              echo "clang-format -i \$(find include tests examples tools \\"
+              echo "  -type f \\( -name '*.hpp' -o -name '*.cpp' \\))"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$dirty" ]; then
+            printf "%b" "$dirty"
+            echo "::warning::Some files differ from .clang-format (non-blocking for now)."
+            exit 1
+          fi
+          echo "All files match .clang-format."
+
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      # clang-tidy needs to know how each file is compiled. The library
+      # is header-only, so the headers are analysed through the test and
+      # example translation units that include them; HeaderFilterRegex in
+      # .clang-tidy limits the diagnostics to include/minimosq.
+      - name: Generate a compilation database
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Run clang-tidy
+        id: tidy
+        run: |
+          set -uo pipefail
+          clang-tidy --version
+          files=$(find tests examples tools -name '*.cpp' | sort)
+          # -quiet suppresses the per-file "N warnings generated" noise;
+          # the header filter means most files legitimately report none.
+          clang-tidy -p build --quiet $files 2>/dev/null | tee tidy.log || true
+          # Deduplicate: a header included by 15 translation units
+          # otherwise reports the same finding 15 times.
+          grep -E '(warning|error):' tidy.log | sort -u > tidy-unique.log || true
+          count=$(wc -l < tidy-unique.log)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "$count unique finding(s)"
+
+      - name: Publish the findings
+        if: always()
+        run: |
+          {
+            echo "## clang-tidy"
+            echo ""
+            if [ "${{ steps.tidy.outputs.count }}" = "0" ]; then
+              echo "No findings."
+            else
+              echo "**${{ steps.tidy.outputs.count }} unique finding(s)**, deduplicated"
+              echo "across translation units. Non-blocking for now — see the"
+              echo "header comment in \`.github/workflows/analysis.yml\`."
+              echo ""
+              echo '```'
+              head -100 tidy-unique.log
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the full log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: clang-tidy-log
+          path: |
+            tidy.log
+            tidy-unique.log
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # to upload results to the Security tab
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+          # security-and-quality adds maintainability queries on top of
+          # the default security set. Worth it here: the codebase is
+          # small enough that the extra findings stay reviewable.
+          queries: security-and-quality
+
+      # CodeQL observes a real build. Examples and tools are included so
+      # the POSIX transports are covered, not just the portable core.
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build -j"$(nproc)"
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:c-cpp
