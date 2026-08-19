@@ -1,0 +1,80 @@
+# clang-tidy configuration for minimosq.
+#
+# The check list is curated rather than wholesale. minimosq is a
+# header-only, allocation-free, exception-free C++17 library for
+# embedded targets, and several popular check groups assume the
+# opposite: they want std::vector where the whole point is a fixed
+# array, or std::span/gsl where the library ships its own ByteSpan
+# precisely so it has no dependencies. Enabling those produces hundreds
+# of findings that all resolve to "this is a deliberate design
+# decision", which trains everyone to ignore the tool.
+#
+# What is enabled is the part that finds real defects: bugprone-*,
+# cert-*, the memory- and bounds-related cppcoreguidelines checks,
+# performance-*, portability-* and misc-*.
+
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  concurrency-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-braces-around-statements,
+  readability-inconsistent-declaration-parameter-name,
+  readability-misleading-indentation,
+  readability-non-const-parameter,
+  readability-redundant-control-flow,
+  readability-simplify-boolean-expr,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-narrowing-conversions,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-virtual-class-destructor,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -cert-err58-cpp,
+  -cert-dcl21-cpp
+
+# Rationale for the suppressions above:
+#
+#   bugprone-easily-swappable-parameters
+#       Fires on (uint8_t* buf, size_t cap) and every similar
+#       buffer-plus-length pair. That is the shape of the entire wire
+#       API and is not going to change.
+#
+#   bugprone-exception-escape
+#       The library is built with -fno-exceptions; there are no
+#       exceptions to escape.
+#
+#   misc-non-private-member-variables-in-classes
+#       ByteSpan and StrView are deliberately aggregates with public
+#       data members, so they stay trivially copyable and usable in
+#       constant expressions.
+#
+#   misc-no-recursion
+#       flush_dead()/teardown() are mutually iterative by design; the
+#       recursion the check sees is bounded by max_connections and the
+#       reasoning is documented at the call site.
+#
+#   cert-err58-cpp / cert-dcl21-cpp
+#       Concern static initialisation order and operator++ return
+#       conventions in ways that do not apply to a header-only library
+#       with no global constructors.
+
+# Only diagnose the shipped library. Tests and examples exercise it and
+# have looser standards on purpose (raw sockets, fixed-size scratch
+# buffers, deliberately malformed packets).
+HeaderFilterRegex: 'include/minimosq/.*\.hpp$'
+
+FormatStyle: file
+
+CheckOptions:
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: '0'
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: 'ByteSpan;StrView'

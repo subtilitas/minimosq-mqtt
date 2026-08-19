@@ -1,6 +1,7 @@
 # minimosq
 
 [![CI](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml/badge.svg)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml)
+[![Analysis](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/analysis.yml/badge.svg)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/analysis.yml)
 [![codecov](https://codecov.io/gh/subtilitas/minimosq-mqtt/branch/main/graph/badge.svg)](https://codecov.io/gh/subtilitas/minimosq-mqtt)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -144,6 +145,11 @@ AddressSanitizer + UndefinedBehaviorSanitizer and an end-to-end smoke
 test against stock `mosquitto` clients. The whole repository builds
 warning-free with `-Wall -Wextra -Wpedantic -Wconversion
 -Wsign-conversion -Wshadow -Werror`.
+
+Static analysis runs separately ([`analysis.yml`](.github/workflows/analysis.yml)):
+CodeQL with the `security-and-quality` queries, clang-tidy against the
+curated check list in [`.clang-tidy`](.clang-tidy), and a
+`clang-format` check.
 
 Coverage of `include/minimosq/`:
 
