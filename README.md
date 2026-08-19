@@ -151,23 +151,20 @@ CodeQL with the `security-and-quality` queries, clang-tidy against the
 curated check list in [`.clang-tidy`](.clang-tidy), and a
 `clang-format` check.
 
-Coverage of `include/minimosq/`:
+Coverage of `include/minimosq/` is measured on every push and published
+to [Codecov](https://codecov.io/gh/subtilitas/minimosq-mqtt); the
+coverage job prints a per-layer and per-file breakdown in its summary.
+CI fails if it drops below the floor set in
+[`ci.yml`](.github/workflows/ci.yml).
 
-| Layer | Lines | Coverage |
-| --- | ---: | ---: |
-| `topic.hpp` (matching, subsumption) | 96 | 99.0% |
-| core (containers, spans) | 177 | 98.9% |
-| broker (sessions, routing, ACL) | 608 | 97.5% |
-| protocol (parse/serialize) | 315 | 96.5% |
-| transports (POSIX, TLS seam) | 338 | 84.3% |
-| **total** | **1534** | **94.7% lines, 84.3% branches** |
-
-Reproduce it locally:
+Reproduce the CI number exactly — the compiler matters, see below:
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="--coverage -O0 -g"
+sudo apt-get install -y g++-13
+cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+      -DCMAKE_CXX_COMPILER=g++-13 -DCMAKE_CXX_FLAGS="--coverage -O0 -g"
 cmake --build build && ctest --test-dir build
-python3 tools/coverage.py --build-dir build --show-missing
+python3 tools/coverage.py --build-dir build --gcov gcov-13 --show-missing
 ```
 
 > **Why `tools/coverage.py` and not `gcovr` directly?** minimosq is
@@ -178,7 +175,13 @@ python3 tools/coverage.py --build-dir build --show-missing
 > when it has ~950. `tools/coverage.py` merges by source line — a line
 > counts as covered if any instantiation executed it — and emits the
 > merged result as Cobertura XML so CI, Codecov and a local run all agree.
-> CI fails if line coverage drops below 94% or branch below 83%.
+>
+> **The compiler is part of the measurement.** Different GCC releases
+> instrument a different number of lines in template-heavy headers, and
+> this library is nothing but those: the same tree measures 94.7% under
+> GCC 11 and 87% under GCC 13. Neither is wrong, but a percentage is
+> only comparable against the same compiler, so the coverage job pins
+> one and `tools/coverage.py` takes `--gcov` to match it.
 
 ## Documentation
 

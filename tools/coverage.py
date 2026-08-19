@@ -50,22 +50,32 @@ GROUPS = [
 ]
 
 
-def gcov_json_flag():
-    """The JSON-output flag for the gcov on PATH.
+def gcov_json_flag(gcov):
+    """The JSON-output flag for this gcov.
 
     GCC 11 replaced -i with -j for JSON output but kept -i as an alias;
     older gcov only understands -i. Ask rather than assume, so this works
     across the range of runner images.
     """
     try:
-        help_text = subprocess.run(["gcov", "--help"], check=False,
+        help_text = subprocess.run([gcov, "--help"], check=False,
                                    capture_output=True, text=True).stdout
     except FileNotFoundError:
-        sys.exit("coverage: gcov not found on PATH")
+        sys.exit(f"coverage: {gcov} not found on PATH")
     return "-j" if "--json-format" in help_text and "-j," in help_text else "-i"
 
 
-def run_gcov(build_dir, out_dir):
+def gcov_version(gcov):
+    try:
+        out = subprocess.run([gcov, "--version"], check=False,
+                             capture_output=True, text=True).stdout
+    except FileNotFoundError:
+        sys.exit(f"coverage: {gcov!r} not found on PATH — name the gcov that "
+                 "matches the compiler which built the tests (e.g. --gcov gcov-13)")
+    return out.splitlines()[0].strip() if out else "unknown"
+
+
+def run_gcov(build_dir, out_dir, gcov):
     """Generate one JSON report per .gcda under build_dir, into out_dir.
 
     gcov writes its output to the *current working directory* — `-o` only
@@ -81,13 +91,13 @@ def run_gcov(build_dir, out_dir):
         sys.exit(f"coverage: no .gcda files under {build_dir!r} — "
                  "were the tests built with --coverage and then run?")
 
-    flag = gcov_json_flag()
+    flag = gcov_json_flag(gcov)
     failures = []
     for index, path in enumerate(sorted(gcda)):
         target = os.path.join(out_dir, str(index))
         os.makedirs(target, exist_ok=True)
         result = subprocess.run(
-            ["gcov", "-b", flag, "-o", os.path.dirname(os.path.abspath(path)),
+            [gcov, "-b", flag, "-o", os.path.dirname(os.path.abspath(path)),
              os.path.abspath(path)],
             check=False, capture_output=True, text=True, cwd=target,
         )
@@ -96,7 +106,7 @@ def run_gcov(build_dir, out_dir):
     if len(failures) == len(gcda):
         for path, err in failures[:3]:
             print(f"coverage: gcov failed on {path}: {err[:200]}", file=sys.stderr)
-        sys.exit("coverage: gcov failed on every .gcda — most likely a gcov/gcc "
+        sys.exit(f"coverage: {gcov} failed on every .gcda — most likely a gcov/gcc "
                  "version mismatch (gcov must match the compiler that built the tests)")
     for path, err in failures[:3]:
         print(f"coverage: warning: gcov failed on {path}: {err[:200]}", file=sys.stderr)
@@ -226,6 +236,13 @@ def write_xml(path, lines, branches, root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", default="build")
+    # The measured percentage depends on the compiler: different GCC
+    # releases instrument a different number of lines in template-heavy
+    # headers, so the same tree can read 94% under one and 87% under
+    # another. Pin the compiler that builds the tests and name the
+    # matching gcov here, or the number is not comparable run to run.
+    parser.add_argument("--gcov", default=os.environ.get("GCOV", "gcov"),
+                        help="gcov binary matching the compiler used to build (env: GCOV)")
     parser.add_argument("--root", default=".")
     parser.add_argument("--xml")
     parser.add_argument("--summary", help="write a Markdown table here (GitHub job summary)")
@@ -242,7 +259,8 @@ def main():
     shutil.rmtree(report_dir, ignore_errors=True)
     os.makedirs(report_dir, exist_ok=True)
 
-    count = run_gcov(args.build_dir, report_dir)
+    print(f"using {args.gcov}: {gcov_version(args.gcov)}")
+    count = run_gcov(args.build_dir, report_dir, args.gcov)
     lines, branches = merge(report_dir, args.root)
     rows, totals, l_total, l_hit, b_total, b_hit = table(lines, branches)
     line_pct = 100.0 * l_hit / l_total if l_total else 100.0
