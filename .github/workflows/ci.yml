@@ -140,6 +140,12 @@ jobs:
       # tools/coverage.py merges per-instantiation gcov records instead
       # of summing them; see the comment at the top of that file for why
       # a plain gcovr run reports roughly 58% for this codebase.
+      #
+      # --fail-under-line gates the *fully covered* figure — a line counts
+      # only when every branch on it was taken — because that is what
+      # Codecov reports. Gating the looser "executed at least once"
+      # number instead would have the badge and the gate permanently
+      # disagreeing by about seven points.
       - name: Measure coverage
         run: >
           python3 tools/coverage.py
@@ -150,7 +156,7 @@ jobs:
           --json coverage.json
           --show-missing
           --fail-under-line 85
-          --fail-under-branch 72
+          --fail-under-branch 80
 
       - name: Upload coverage to Codecov
         id: codecov

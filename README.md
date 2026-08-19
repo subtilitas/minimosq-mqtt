@@ -176,12 +176,18 @@ python3 tools/coverage.py --build-dir build --gcov gcov-13 --show-missing
 > counts as covered if any instantiation executed it — and emits the
 > merged result as Cobertura XML so CI, Codecov and a local run all agree.
 >
-> **The compiler is part of the measurement.** Different GCC releases
-> instrument a different number of lines in template-heavy headers, and
-> this library is nothing but those: the same tree measures 94.7% under
-> GCC 11 and 87% under GCC 13. Neither is wrong, but a percentage is
-> only comparable against the same compiler, so the coverage job pins
-> one and `tools/coverage.py` takes `--gcov` to match it.
+> **Two numbers, and they differ by about seven points.** A line can be
+> *executed* without every branch on it being taken. Classic line
+> coverage counts it; Codecov counts it as *partial* and reports only
+> fully covered lines. On this tree that is 94.7% executed against 87.4%
+> fully covered. `tools/coverage.py` prints both and the CI floor gates
+> the stricter one, so the gate and the badge always agree.
+>
+> **The compiler is part of the measurement too.** Different GCC
+> releases instrument a different number of lines in template-heavy
+> headers, so a percentage is only comparable against the same
+> compiler — worth roughly one point here. The coverage job pins one and
+> `tools/coverage.py` takes `--gcov` to match it.
 
 ## Documentation
 
