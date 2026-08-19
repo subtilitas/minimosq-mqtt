@@ -131,6 +131,8 @@ jobs:
           --fail-under-branch 78
 
       - name: Upload coverage to Codecov
+        id: codecov
+        continue-on-error: true
         uses: codecov/codecov-action@v7
         with:
           files: ./coverage.xml
@@ -139,9 +141,29 @@ jobs:
           # Public-repo uploads work without a token; the secret is used
           # when present so pushes to a protected branch are accepted.
           token: ${{ secrets.CODECOV_TOKEN }}
-          # The floor above is the real gate. A Codecov outage should not
-          # fail a build that met it.
-          fail_ci_if_error: false
+          # The coverage floor above is the real gate — a Codecov outage
+          # must not fail a build that met it. continue-on-error keeps the
+          # job green while the step below still reports what happened, so
+          # "badge says unknown" is never a silent failure.
+          fail_ci_if_error: true
+
+      - name: Report the upload result
+        if: always()
+        run: |
+          if [ "${{ steps.codecov.outcome }}" = "success" ]; then
+            echo "Codecov upload succeeded."
+          else
+            echo "::warning::Codecov upload FAILED — the badge will read 'unknown'."
+            echo "The coverage gate itself passed; only the upload is affected."
+            echo ""
+            echo "Most likely causes, in order:"
+            echo "  1. The repository is not activated at https://codecov.io/gh/${{ github.repository }}"
+            echo "  2. A CODECOV_TOKEN secret is required (protected branch, or"
+            echo "     tokenless uploads disabled for the org) and is not set."
+            echo "  3. Codecov was unreachable."
+            echo ""
+            echo "coverage.xml is attached to this run as an artifact either way."
+          fi
 
       - name: Keep the report as an artifact
         if: always()

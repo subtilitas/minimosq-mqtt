@@ -49,33 +49,72 @@ GROUPS = [
 ]
 
 
+def gcov_json_flag():
+    """The JSON-output flag for the gcov on PATH.
+
+    GCC 11 replaced -i with -j for JSON output but kept -i as an alias;
+    older gcov only understands -i. Ask rather than assume, so this works
+    across the range of runner images.
+    """
+    try:
+        help_text = subprocess.run(["gcov", "--help"], check=False,
+                                   capture_output=True, text=True).stdout
+    except FileNotFoundError:
+        sys.exit("coverage: gcov not found on PATH")
+    return "-j" if "--json-format" in help_text and "-j," in help_text else "-i"
+
+
 def run_gcov(build_dir):
-    """Regenerate .gcov.json.gz next to every .gcda under build_dir."""
+    """Regenerate the JSON report next to every .gcda under build_dir."""
     gcda = []
     for dirpath, _dirnames, filenames in os.walk(build_dir):
         gcda.extend(os.path.join(dirpath, f) for f in filenames if f.endswith(".gcda"))
     if not gcda:
         sys.exit(f"coverage: no .gcda files under {build_dir!r} — "
                  "were the tests built with --coverage and then run?")
+    flag = gcov_json_flag()
+    failures = 0
     for path in gcda:
-        subprocess.run(
-            ["gcov", "-b", "-j", "-o", os.path.dirname(path), path],
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        result = subprocess.run(
+            ["gcov", "-b", flag, "-o", os.path.dirname(path), path],
+            check=False, capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            failures += 1
+            if failures <= 3:
+                print(f"coverage: gcov failed on {path}: "
+                      f"{result.stderr.strip()[:200]}", file=sys.stderr)
+    if failures == len(gcda):
+        sys.exit("coverage: gcov failed on every .gcda — most likely a gcov/gcc "
+                 "version mismatch (gcov must match the compiler that built the tests)")
     return len(gcda)
+
+
+def load_report(path):
+    """Read a gcov JSON report, compressed or not.
+
+    Which one you get depends on the gcov version, so sniff the gzip
+    magic instead of trusting the file extension.
+    """
+    with open(path, "rb") as handle:
+        magic = handle.read(2)
+    opener = gzip.open if magic == b"\x1f\x8b" else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def merge(build_dir, root):
     """Union coverage across translation units and instantiations."""
     lines = collections.defaultdict(dict)    # file -> {line: covered}
     branches = collections.defaultdict(dict)  # file -> {(line, idx): taken}
-    reports = glob.glob(os.path.join(build_dir, "**", "*.gcov.json.gz"), recursive=True)
+    reports = (glob.glob(os.path.join(build_dir, "**", "*.gcov.json.gz"), recursive=True) +
+               glob.glob(os.path.join(build_dir, "**", "*.gcov.json"), recursive=True))
     if not reports:
-        sys.exit("coverage: gcov produced no JSON reports")
+        sys.exit("coverage: gcov produced no JSON reports (looked for *.gcov.json[.gz] "
+                 f"under {build_dir!r})")
 
     for report in reports:
-        with gzip.open(report, "rt") as handle:
-            data = json.load(handle)
+        data = load_report(report)
         for entry in data.get("files", []):
             name = entry["file"]
             if os.path.isabs(name):
