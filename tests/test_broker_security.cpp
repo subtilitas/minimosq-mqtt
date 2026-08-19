@@ -30,7 +30,10 @@ struct RoleSecurity {
 
     minimosq::ConnackCode authenticate(minimosq::StrView, const minimosq::StrView* username,
                                        const minimosq::ByteSpan*, Context& ctx) {
-        ctx.role = (username != nullptr && username->len == 1) ? username->data[0] : 0;
+        // Both arms are char: with a literal 0 the conditional yields int
+        // and narrows on assignment, which is implementation-defined for
+        // values above CHAR_MAX when char is signed.
+        ctx.role = (username != nullptr && username->len == 1) ? username->data[0] : '\0';
         return minimosq::ConnackCode::accepted;
     }
 
