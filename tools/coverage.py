@@ -33,6 +33,7 @@ import glob
 import gzip
 import json
 import os
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -64,29 +65,41 @@ def gcov_json_flag():
     return "-j" if "--json-format" in help_text and "-j," in help_text else "-i"
 
 
-def run_gcov(build_dir):
-    """Regenerate the JSON report next to every .gcda under build_dir."""
+def run_gcov(build_dir, out_dir):
+    """Generate one JSON report per .gcda under build_dir, into out_dir.
+
+    gcov writes its output to the *current working directory* — `-o` only
+    says where to look for the object files. So each invocation runs with
+    cwd set to a private output directory; that also keeps reports from
+    different targets that share an object basename from overwriting each
+    other, and keeps the build tree clean.
+    """
     gcda = []
     for dirpath, _dirnames, filenames in os.walk(build_dir):
         gcda.extend(os.path.join(dirpath, f) for f in filenames if f.endswith(".gcda"))
     if not gcda:
         sys.exit(f"coverage: no .gcda files under {build_dir!r} — "
                  "were the tests built with --coverage and then run?")
+
     flag = gcov_json_flag()
-    failures = 0
-    for path in gcda:
+    failures = []
+    for index, path in enumerate(sorted(gcda)):
+        target = os.path.join(out_dir, str(index))
+        os.makedirs(target, exist_ok=True)
         result = subprocess.run(
-            ["gcov", "-b", flag, "-o", os.path.dirname(path), path],
-            check=False, capture_output=True, text=True,
+            ["gcov", "-b", flag, "-o", os.path.dirname(os.path.abspath(path)),
+             os.path.abspath(path)],
+            check=False, capture_output=True, text=True, cwd=target,
         )
         if result.returncode != 0:
-            failures += 1
-            if failures <= 3:
-                print(f"coverage: gcov failed on {path}: "
-                      f"{result.stderr.strip()[:200]}", file=sys.stderr)
-    if failures == len(gcda):
+            failures.append((path, result.stderr.strip()))
+    if len(failures) == len(gcda):
+        for path, err in failures[:3]:
+            print(f"coverage: gcov failed on {path}: {err[:200]}", file=sys.stderr)
         sys.exit("coverage: gcov failed on every .gcda — most likely a gcov/gcc "
                  "version mismatch (gcov must match the compiler that built the tests)")
+    for path, err in failures[:3]:
+        print(f"coverage: warning: gcov failed on {path}: {err[:200]}", file=sys.stderr)
     return len(gcda)
 
 
@@ -103,15 +116,15 @@ def load_report(path):
         return json.load(handle)
 
 
-def merge(build_dir, root):
+def merge(report_dir, root):
     """Union coverage across translation units and instantiations."""
     lines = collections.defaultdict(dict)    # file -> {line: covered}
     branches = collections.defaultdict(dict)  # file -> {(line, idx): taken}
-    reports = (glob.glob(os.path.join(build_dir, "**", "*.gcov.json.gz"), recursive=True) +
-               glob.glob(os.path.join(build_dir, "**", "*.gcov.json"), recursive=True))
+    reports = (glob.glob(os.path.join(report_dir, "**", "*.gcov.json.gz"), recursive=True) +
+               glob.glob(os.path.join(report_dir, "**", "*.gcov.json"), recursive=True))
     if not reports:
         sys.exit("coverage: gcov produced no JSON reports (looked for *.gcov.json[.gz] "
-                 f"under {build_dir!r})")
+                 f"under {report_dir!r})")
 
     for report in reports:
         data = load_report(report)
@@ -222,8 +235,15 @@ def main():
     parser.add_argument("--show-missing", action="store_true")
     args = parser.parse_args()
 
-    count = run_gcov(args.build_dir)
-    lines, branches = merge(args.build_dir, args.root)
+    # Reports go to a scratch directory that is emptied first: a stale
+    # report left over from an earlier run would otherwise be merged in
+    # and could make a broken run look like a working one.
+    report_dir = os.path.join(args.build_dir, ".coverage-json")
+    shutil.rmtree(report_dir, ignore_errors=True)
+    os.makedirs(report_dir, exist_ok=True)
+
+    count = run_gcov(args.build_dir, report_dir)
+    lines, branches = merge(report_dir, args.root)
     rows, totals, l_total, l_hit, b_total, b_hit = table(lines, branches)
     line_pct = 100.0 * l_hit / l_total if l_total else 100.0
     branch_pct = 100.0 * b_hit / b_total if b_total else 100.0
