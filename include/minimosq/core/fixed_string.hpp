@@ -47,6 +47,6 @@ private:
     size_t len_ = 0;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_CORE_FIXED_STRING_HPP
+#endif  // MINIMOSQ_CORE_FIXED_STRING_HPP

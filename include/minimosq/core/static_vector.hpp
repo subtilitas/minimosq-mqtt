@@ -115,6 +115,6 @@ private:
     size_t size_ = 0;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_CORE_STATIC_VECTOR_HPP
+#endif  // MINIMOSQ_CORE_STATIC_VECTOR_HPP

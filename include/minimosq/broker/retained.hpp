@@ -75,6 +75,6 @@ private:
     Pool<Entry, Traits::max_retained> pool_;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_BROKER_RETAINED_HPP
+#endif  // MINIMOSQ_BROKER_RETAINED_HPP

@@ -126,6 +126,6 @@ private:
     size_t count_ = 0;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_CORE_POOL_HPP
+#endif  // MINIMOSQ_CORE_POOL_HPP

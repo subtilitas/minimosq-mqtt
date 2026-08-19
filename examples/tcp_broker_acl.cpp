@@ -51,7 +51,7 @@ bool configure_acl(Acl& acl) {
            acl.add_rule(ROLE_DASHBOARD, "control/#", Acl::read_write);
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
     const long port_arg = argc > 1 ? std::atol(argv[1]) : 1883;

@@ -11,4 +11,4 @@
 #include "broker/config.hpp"
 #include "transport.hpp"
 
-#endif // MINIMOSQ_MINIMOSQ_HPP
+#endif  // MINIMOSQ_MINIMOSQ_HPP

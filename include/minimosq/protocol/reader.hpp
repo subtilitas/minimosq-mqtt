@@ -80,6 +80,6 @@ private:
     bool ok_ = true;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_PROTOCOL_READER_HPP
+#endif  // MINIMOSQ_PROTOCOL_READER_HPP

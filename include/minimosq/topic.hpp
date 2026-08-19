@@ -73,9 +73,9 @@ inline bool topic_matches(StrView filter, StrView name) {
         return false;
     }
 
-    size_t fi = 0;           // start of the current filter level
-    size_t ni = 0;           // start of the current name level
-    bool name_active = true; // name still contributes a current level
+    size_t fi = 0;            // start of the current filter level
+    size_t ni = 0;            // start of the current name level
+    bool name_active = true;  // name still contributes a current level
 
     while (true) {
         // Current filter level is [fi, fe).
@@ -135,9 +135,9 @@ inline bool topic_filter_covers(StrView cover, StrView filter) {
         return false;
     }
 
-    size_t ci = 0;             // start of the current cover level
-    size_t fi = 0;             // start of the current filter level
-    bool filter_active = true; // filter still contributes a current level
+    size_t ci = 0;              // start of the current cover level
+    size_t fi = 0;              // start of the current filter level
+    bool filter_active = true;  // filter still contributes a current level
 
     while (true) {
         size_t ce = ci;
@@ -191,6 +191,6 @@ inline bool topic_filter_covers(StrView cover, StrView filter) {
     }
 }
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TOPIC_HPP
+#endif  // MINIMOSQ_TOPIC_HPP

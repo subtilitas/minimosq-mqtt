@@ -78,7 +78,7 @@ bool wait_packet(Transport& t, B& b, int fd, uint8_t* buf, size_t cap, size_t& g
     return false;
 }
 
-} // namespace
+}  // namespace
 
 TEST(pipe_end_to_end_pubsub) {
     std::signal(SIGPIPE, SIG_IGN);
@@ -107,9 +107,9 @@ TEST(pipe_end_to_end_pubsub) {
 
     // QoS 1 loopback over the pipes: the broker forwards the PUBLISH to
     // the (same) client first, then acks the inbound publish.
-    send_all(pp.c2b[1], wire::make_publish("p/x", wire::bs("via-pipe"), QoS::at_least_once,
-                                           false, false, 11)
-                            .span());
+    send_all(pp.c2b[1],
+             wire::make_publish("p/x", wire::bs("via-pipe"), QoS::at_least_once, false, false, 11)
+                 .span());
     CHECK(wait_packet(t, b, pp.b2c[0], buf, sizeof buf, got, pos, fb, body));
     PublishPacket p;
     CHECK(parse_publish(fb, body, p) == Err::ok);
@@ -136,7 +136,7 @@ TEST(pipe_client_eof_closes_transport) {
     Broker<PipeTraits, Transport> b{t};
     CHECK(t.open(pp.c2b[0], pp.b2c[1]));
 
-    t.poll_once(b, 5);  // opens connection 0
+    t.poll_once(b, 5);   // opens connection 0
     ::close(pp.c2b[1]);  // client goes away
     ::close(pp.b2c[0]);
     for (int i = 0; i < 10 && !t.closed(); ++i) {

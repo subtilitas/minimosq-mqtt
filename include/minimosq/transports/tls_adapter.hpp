@@ -72,8 +72,7 @@ struct NullTlsEngine {
         return true;
     }
 
-    bool encrypt(ByteSpan plain, uint8_t* cipher, size_t cipher_cap,
-                 size_t& cipher_len) noexcept {
+    bool encrypt(ByteSpan plain, uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) noexcept {
         if (plain.len > cipher_cap) {
             return false;
         }
@@ -193,6 +192,6 @@ private:
     uint8_t cipher_[BufSize];
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TRANSPORTS_TLS_ADAPTER_HPP
+#endif  // MINIMOSQ_TRANSPORTS_TLS_ADAPTER_HPP

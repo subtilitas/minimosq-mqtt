@@ -177,6 +177,6 @@ inline void expect_silence(T& t, size_t ci) {
     CHECK(t.no_more(ci));
 }
 
-} // namespace bt
+}  // namespace bt
 
-#endif // MINIMOSQ_TESTS_BROKER_UTIL_HPP
+#endif  // MINIMOSQ_TESTS_BROKER_UTIL_HPP

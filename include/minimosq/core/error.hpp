@@ -18,7 +18,9 @@ enum class Err : unsigned char {
     state,      // operation is not valid in the current state
 };
 
-constexpr bool is_ok(Err e) noexcept { return e == Err::ok; }
+constexpr bool is_ok(Err e) noexcept {
+    return e == Err::ok;
+}
 
 // Human-readable name, intended for examples, tests and diagnostics.
 inline const char* err_name(Err e) noexcept {
@@ -39,6 +41,6 @@ inline const char* err_name(Err e) noexcept {
     return "unknown";
 }
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_CORE_ERROR_HPP
+#endif  // MINIMOSQ_CORE_ERROR_HPP

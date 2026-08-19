@@ -108,8 +108,8 @@ public:
 
     // ------------------------------------------------ policy interface
 
-    ConnackCode authenticate(StrView client_id, const StrView* username,
-                             const ByteSpan* password, Context& ctx) {
+    ConnackCode authenticate(StrView client_id, const StrView* username, const ByteSpan* password,
+                             Context& ctx) {
         (void)client_id;
         if (username == nullptr) {
             if (!anon_allowed_) {
@@ -198,6 +198,6 @@ private:
     bool anon_allowed_ = false;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_BROKER_TABLE_ACL_HPP
+#endif  // MINIMOSQ_BROKER_TABLE_ACL_HPP

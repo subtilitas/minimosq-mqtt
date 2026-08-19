@@ -25,7 +25,9 @@ struct Pkt {
 };
 
 // Payload literal → bytes.
-inline ByteSpan bs(const char* s) { return StrView(s).bytes(); }
+inline ByteSpan bs(const char* s) {
+    return StrView(s).bytes();
+}
 
 // The body (variable header + payload) of a framed packet.
 inline ByteSpan body_of(const Pkt& p) {
@@ -68,8 +70,8 @@ inline Pkt make_connect(StrView client_id, const ConnectOpts& o = {}) {
     }
     if (o.will_topic != nullptr) {
         flags |= cf::will;
-        flags = static_cast<uint8_t>(flags | (static_cast<uint8_t>(o.will_qos)
-                                              << cf::will_qos_shift));
+        flags =
+            static_cast<uint8_t>(flags | (static_cast<uint8_t>(o.will_qos) << cf::will_qos_shift));
         if (o.will_retain) {
             flags |= cf::will_retain;
         }
@@ -98,8 +100,8 @@ inline Pkt make_connect(StrView client_id, const ConnectOpts& o = {}) {
         w.u16(static_cast<uint16_t>(pw.len));
         w.bytes(pw);
     }
-    const ByteSpan full = minimosq::frame_packet(
-        p.data, minimosq::make_first_byte(PacketType::connect, 0), w.size());
+    const ByteSpan full =
+        minimosq::frame_packet(p.data, minimosq::make_first_byte(PacketType::connect, 0), w.size());
     // frame_packet may not start at data[0]; normalize to the front.
     for (size_t i = 0; i < full.len; ++i) {
         p.data[i] = full.data[i];
@@ -169,9 +171,13 @@ inline Pkt make_empty(PacketType t) {
     return p;
 }
 
-inline Pkt make_pingreq() { return make_empty(PacketType::pingreq); }
-inline Pkt make_disconnect() { return make_empty(PacketType::disconnect); }
+inline Pkt make_pingreq() {
+    return make_empty(PacketType::pingreq);
+}
+inline Pkt make_disconnect() {
+    return make_empty(PacketType::disconnect);
+}
 
-} // namespace wire
+}  // namespace wire
 
-#endif // MINIMOSQ_TESTS_WIRE_UTIL_HPP
+#endif  // MINIMOSQ_TESTS_WIRE_UTIL_HPP

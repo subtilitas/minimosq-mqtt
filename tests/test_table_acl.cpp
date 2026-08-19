@@ -21,7 +21,7 @@ void populate(Acl& acl) {
     CHECK(acl.add_rule(ROLE_DASH, "control/#", Acl::read_write));
 }
 
-} // namespace
+}  // namespace
 
 TEST(table_acl_authentication) {
     Acl acl;
@@ -74,9 +74,9 @@ TEST(table_acl_authorization_rules) {
 
 TEST(table_acl_rejects_bad_config) {
     Acl acl;
-    CHECK(!acl.add_user("", "pw", 1));               // empty username
+    CHECK(!acl.add_user("", "pw", 1));                    // empty username
     CHECK(!acl.add_rule(1, "bad/#/pattern", Acl::read));  // invalid filter
-    CHECK(acl.add_user("a", "", 1));                 // empty password is legal
+    CHECK(acl.add_user("a", "", 1));                      // empty password is legal
 }
 
 TEST(table_acl_end_to_end) {

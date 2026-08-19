@@ -76,6 +76,6 @@ private:
     char path_[sizeof(sockaddr_un{}.sun_path)] = {};
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_TRANSPORTS_POSIX_UNIX_SOCKET_HPP
+#endif  // MINIMOSQ_TRANSPORTS_POSIX_UNIX_SOCKET_HPP

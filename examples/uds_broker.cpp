@@ -25,7 +25,7 @@ void on_signal(int) {
     transport.stop();
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
     const char* path = argc > 1 ? argv[1] : "/tmp/minimosq.sock";

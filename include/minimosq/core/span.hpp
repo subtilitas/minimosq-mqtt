@@ -54,7 +54,9 @@ inline bool operator==(ByteSpan a, ByteSpan b) noexcept {
     return true;
 }
 
-inline bool operator!=(ByteSpan a, ByteSpan b) noexcept { return !(a == b); }
+inline bool operator!=(ByteSpan a, ByteSpan b) noexcept {
+    return !(a == b);
+}
 
 // Read-only view of UTF-8 text. Not NUL-terminated.
 struct StrView {
@@ -92,13 +94,15 @@ constexpr bool operator==(StrView a, StrView b) noexcept {
     return true;
 }
 
-constexpr bool operator!=(StrView a, StrView b) noexcept { return !(a == b); }
+constexpr bool operator!=(StrView a, StrView b) noexcept {
+    return !(a == b);
+}
 
 // Reinterpret protocol bytes as text (MQTT strings are UTF-8 on the wire).
 inline StrView as_str(ByteSpan b) noexcept {
     return StrView{reinterpret_cast<const char*>(b.data), b.len};
 }
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_CORE_SPAN_HPP
+#endif  // MINIMOSQ_CORE_SPAN_HPP

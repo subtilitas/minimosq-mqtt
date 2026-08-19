@@ -12,8 +12,8 @@ using namespace minimosq;
 TEST(topic_name_validation) {
     CHECK(topic_name_valid("a"));
     CHECK(topic_name_valid("a/b/c"));
-    CHECK(topic_name_valid("/"));       // two empty levels: allowed
-    CHECK(topic_name_valid("a//b"));    // empty middle level: allowed
+    CHECK(topic_name_valid("/"));     // two empty levels: allowed
+    CHECK(topic_name_valid("a//b"));  // empty middle level: allowed
     CHECK(topic_name_valid("$SYS/x"));
 
     CHECK(!topic_name_valid(""));
@@ -82,13 +82,13 @@ TEST(filter_subsumption) {
     CHECK(topic_filter_covers("#", "#"));
     CHECK(topic_filter_covers("#", "+/+"));
     CHECK(topic_filter_covers("home/#", "home/+/temp"));
-    CHECK(topic_filter_covers("home/#", "home"));       // '#' covers the parent
+    CHECK(topic_filter_covers("home/#", "home"));  // '#' covers the parent
     CHECK(topic_filter_covers("home/+", "home/kitchen"));
     CHECK(topic_filter_covers("+", "kitchen"));
     CHECK(topic_filter_covers("+/+", "home/+"));
     CHECK(topic_filter_covers("a/b/c", "a/b/c"));
 
-    CHECK(!topic_filter_covers("home/+", "home/#"));    // '#' reaches deeper
+    CHECK(!topic_filter_covers("home/+", "home/#"));  // '#' reaches deeper
     CHECK(!topic_filter_covers("home/kitchen", "home/+"));
     CHECK(!topic_filter_covers("home/#", "#"));
     CHECK(!topic_filter_covers("a/b", "a"));
@@ -104,18 +104,18 @@ TEST(filter_subsumption) {
 
 TEST(utf8_validation) {
     CHECK(utf8_valid("plain ascii"));
-    CHECK(utf8_valid("caf\xC3\xA9"));                  // é
-    CHECK(utf8_valid("\xE2\x82\xAC"));                 // €
-    CHECK(utf8_valid("\xF0\x9F\x99\x82"));             // U+1F642
+    CHECK(utf8_valid("caf\xC3\xA9"));       // é
+    CHECK(utf8_valid("\xE2\x82\xAC"));      // €
+    CHECK(utf8_valid("\xF0\x9F\x99\x82"));  // U+1F642
 
-    CHECK(!utf8_valid(StrView("a\0b", 3)));            // U+0000 forbidden
-    CHECK(!utf8_valid("\xC3"));                        // truncated sequence
-    CHECK(!utf8_valid("\x80"));                        // stray continuation
-    CHECK(!utf8_valid("\xC0\xAF"));                    // overlong '/'
-    CHECK(!utf8_valid("\xE0\x80\xAF"));                // overlong, 3 bytes
-    CHECK(!utf8_valid("\xED\xA0\x80"));                // UTF-16 surrogate D800
-    CHECK(!utf8_valid("\xF4\x90\x80\x80"));            // above U+10FFFF
-    CHECK(!utf8_valid("\xFF\xFE"));                    // invalid lead bytes
+    CHECK(!utf8_valid(StrView("a\0b", 3)));  // U+0000 forbidden
+    CHECK(!utf8_valid("\xC3"));              // truncated sequence
+    CHECK(!utf8_valid("\x80"));              // stray continuation
+    CHECK(!utf8_valid("\xC0\xAF"));          // overlong '/'
+    CHECK(!utf8_valid("\xE0\x80\xAF"));      // overlong, 3 bytes
+    CHECK(!utf8_valid("\xED\xA0\x80"));      // UTF-16 surrogate D800
+    CHECK(!utf8_valid("\xF4\x90\x80\x80"));  // above U+10FFFF
+    CHECK(!utf8_valid("\xFF\xFE"));          // invalid lead bytes
 }
 
 TEST(ill_formed_utf8_invalidates_topics_and_filters) {

@@ -12,7 +12,7 @@ void connected(Bed& x, size_t ci, const char* id,
     x.connect(ci, id, o);
     expect_connack(x.t, ci, false, ConnackCode::accepted);
 }
-} // namespace
+}  // namespace
 
 TEST(subscribe_gets_suback) {
     Bed x;

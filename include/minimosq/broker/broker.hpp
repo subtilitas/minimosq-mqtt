@@ -72,8 +72,8 @@ namespace minimosq {
 struct AllowAllSecurity {
     struct Context {};
 
-    ConnackCode authenticate(StrView client_id, const StrView* username,
-                             const ByteSpan* password, Context& ctx) {
+    ConnackCode authenticate(StrView client_id, const StrView* username, const ByteSpan* password,
+                             Context& ctx) {
         (void)client_id;
         (void)username;
         (void)password;
@@ -184,8 +184,9 @@ public:
         if (c.session != no_session) {
             refresh_deadline(c, now_ms);
         }
-        const Err e = c.parser.feed(
-            data, [&](uint8_t first_byte, ByteSpan body) { return on_packet(ci, first_byte, body); });
+        const Err e = c.parser.feed(data, [&](uint8_t first_byte, ByteSpan body) {
+            return on_packet(ci, first_byte, body);
+        });
         if (e != Err::ok) {
             c.dead = true;  // framing error: abnormal disconnect, will fires
         }
@@ -201,8 +202,7 @@ public:
             if (!c.active || c.dead) {
                 continue;
             }
-            const bool armed =
-                (c.session == no_session) || c.keepalive_s > 0 || max_idle_ms > 0;
+            const bool armed = (c.session == no_session) || c.keepalive_s > 0 || max_idle_ms > 0;
             if (armed && deadline_passed(now_ms, c.deadline_ms)) {
                 c.dead = true;  // abnormal: will fires [MQTT-3.1.2-24]
             }
@@ -938,8 +938,8 @@ private:
                 }
             }
         }
-        send_to(ci, build_packet_id_only(out_, sizeof out_, PacketType::unsuback,
-                                         entries.packet_id()));
+        send_to(ci,
+                build_packet_id_only(out_, sizeof out_, PacketType::unsuback, entries.packet_id()));
     }
 
     void handle_disconnect(size_t ci, ByteSpan body) {
@@ -973,6 +973,6 @@ private:
     uint16_t auto_id_counter_ = 0;
 };
 
-} // namespace minimosq
+}  // namespace minimosq
 
-#endif // MINIMOSQ_BROKER_BROKER_HPP
+#endif  // MINIMOSQ_BROKER_BROKER_HPP
