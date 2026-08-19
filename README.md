@@ -139,7 +139,7 @@ mosquitto_pub -p 1883 -q 2 -t demo/hello -m 'hi' -r
 
 ## Testing and coverage
 
-154 test cases across the protocol, broker, ACL and transport layers,
+177 test cases across the protocol, broker, ACL and transport layers,
 run on every push under GCC and Clang, 32-bit and MSVC, plus
 AddressSanitizer + UndefinedBehaviorSanitizer and an end-to-end smoke
 test against stock `mosquitto` clients. The whole repository builds
@@ -156,11 +156,11 @@ Coverage of `include/minimosq/`:
 | Layer | Lines | Coverage |
 | --- | ---: | ---: |
 | `topic.hpp` (matching, subsumption) | 96 | 99.0% |
-| protocol (parse/serialize) | 313 | 95.5% |
-| core (containers, spans) | 177 | 93.2% |
-| broker (sessions, routing, ACL) | 608 | 92.4% |
-| transports (POSIX, TLS seam) | 337 | 81.0% |
-| **total** | **1531** | **91.1% lines, 79.9% branches** |
+| core (containers, spans) | 177 | 98.9% |
+| broker (sessions, routing, ACL) | 608 | 97.5% |
+| protocol (parse/serialize) | 315 | 96.5% |
+| transports (POSIX, TLS seam) | 338 | 84.3% |
+| **total** | **1534** | **94.7% lines, 84.3% branches** |
 
 Reproduce it locally:
 
@@ -178,7 +178,7 @@ python3 tools/coverage.py --build-dir build --show-missing
 > when it has ~950. `tools/coverage.py` merges by source line — a line
 > counts as covered if any instantiation executed it — and emits the
 > merged result as Cobertura XML so CI, Codecov and a local run all agree.
-> CI fails if line coverage drops below 90% or branch below 78%.
+> CI fails if line coverage drops below 94% or branch below 83%.
 
 ## Documentation
 

@@ -14,7 +14,7 @@ coverage:
     project:
       default:
         # Mirrors the --fail-under-line floor in .github/workflows/ci.yml.
-        target: 90%
+        target: 94%
         threshold: 1%
     patch:
       default:

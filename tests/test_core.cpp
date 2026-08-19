@@ -284,3 +284,30 @@ TEST(pool_release_runs_the_destructor_exactly_once) {
     p.release(c);  // must not destroy it a second time
     CHECK_EQ(dtors, 1);
 }
+
+TEST(err_name_covers_every_code) {
+    // err_name is public diagnostic API: examples and application code
+    // print it. A missing case would silently return "unknown" for a
+    // real error, so pin every enumerator.
+    struct Case {
+        Err code;
+        const char* name;
+    };
+    const Case cases[] = {
+        {Err::ok, "ok"},
+        {Err::truncated, "truncated"},
+        {Err::malformed, "malformed"},
+        {Err::oversize, "oversize"},
+        {Err::capacity, "capacity"},
+        {Err::state, "state"},
+    };
+    for (const Case& c : cases) {
+        CHECK(StrView(err_name(c.code)) == StrView(c.name));
+    }
+    CHECK(is_ok(Err::ok));
+    for (const Case& c : cases) {
+        if (c.code != Err::ok) {
+            CHECK(!is_ok(c.code));
+        }
+    }
+}

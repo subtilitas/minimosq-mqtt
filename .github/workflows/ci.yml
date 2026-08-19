@@ -134,8 +134,8 @@ jobs:
           --summary "$GITHUB_STEP_SUMMARY"
           --json coverage.json
           --show-missing
-          --fail-under-line 90
-          --fail-under-branch 78
+          --fail-under-line 94
+          --fail-under-branch 83
 
       - name: Upload coverage to Codecov
         id: codecov
