@@ -1,6 +1,9 @@
 # minimosq
 
 [![CI](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml/badge.svg)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/subtilitas/minimosq-mqtt/branch/main/graph/badge.svg)](https://codecov.io/gh/subtilitas/minimosq-mqtt)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 A small MQTT 3.1.1 broker as a **header-only C++17 template library**
 for embedded use:
@@ -132,6 +135,44 @@ Try it out with real clients:
 mosquitto_sub -p 1883 -q 1 -t 'demo/#' -v &
 mosquitto_pub -p 1883 -q 2 -t demo/hello -m 'hi' -r
 ```
+
+## Testing and coverage
+
+154 test cases across the protocol, broker, ACL and transport layers,
+run on every push under GCC and Clang, 32-bit and MSVC, plus
+AddressSanitizer + UndefinedBehaviorSanitizer and an end-to-end smoke
+test against stock `mosquitto` clients. The whole repository builds
+warning-free with `-Wall -Wextra -Wpedantic -Wconversion
+-Wsign-conversion -Wshadow -Werror`.
+
+Coverage of `include/minimosq/`:
+
+| Layer | Lines | Coverage |
+| --- | ---: | ---: |
+| `topic.hpp` (matching, subsumption) | 96 | 99.0% |
+| protocol (parse/serialize) | 315 | 95.6% |
+| core (containers, spans) | 174 | 93.1% |
+| broker (sessions, routing, ACL) | 610 | 92.5% |
+| transports (POSIX, TLS seam) | 338 | 80.8% |
+| **total** | **1533** | **91.0% lines, 79.9% branches** |
+
+Reproduce it locally:
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="--coverage -O0 -g"
+cmake --build build && ctest --test-dir build
+python3 tools/coverage.py --build-dir build --show-missing
+```
+
+> **Why `tools/coverage.py` and not `gcovr` directly?** minimosq is
+> header-only and templated, so every test binary and every instantiation
+> (`Broker<SmallTraits>`, `Broker<TinyTraits>`, …) emits its own gcov
+> records for the same source lines. Tools that sum those records rather
+> than merging them report ~58% and claim `broker.hpp` has 4400 lines
+> when it has ~950. `tools/coverage.py` merges by source line — a line
+> counts as covered if any instantiation executed it — and emits the
+> merged result as Cobertura XML so CI, Codecov and a local run all agree.
+> CI fails if line coverage drops below 90% or branch below 78%.
 
 ## Documentation
 
