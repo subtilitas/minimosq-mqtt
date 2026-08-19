@@ -156,11 +156,11 @@ Coverage of `include/minimosq/`:
 | Layer | Lines | Coverage |
 | --- | ---: | ---: |
 | `topic.hpp` (matching, subsumption) | 96 | 99.0% |
-| protocol (parse/serialize) | 315 | 95.6% |
-| core (containers, spans) | 174 | 93.1% |
-| broker (sessions, routing, ACL) | 610 | 92.5% |
-| transports (POSIX, TLS seam) | 338 | 80.8% |
-| **total** | **1533** | **91.0% lines, 79.9% branches** |
+| protocol (parse/serialize) | 313 | 95.5% |
+| core (containers, spans) | 177 | 93.2% |
+| broker (sessions, routing, ACL) | 608 | 92.4% |
+| transports (POSIX, TLS seam) | 337 | 81.0% |
+| **total** | **1531** | **91.1% lines, 79.9% branches** |
 
 Reproduce it locally:
 

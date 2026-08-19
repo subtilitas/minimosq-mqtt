@@ -3,22 +3,23 @@ name: Analysis
 # Static analysis, kept separate from ci.yml so a finding here never
 # looks like a build or test failure.
 #
-# All three jobs are non-blocking on first landing. None of these tools
-# has ever run against this codebase, so their output is unmeasured, and
-# a gate that goes red on day one for reasons nobody has read yet just
-# teaches everyone to ignore it.
+# clang-format is a gate: the tree was normalised in ee8ded5 and stays
+# that way. The version is pinned via pip rather than taken from the
+# runner image, because different clang-format releases format the same
+# code differently — an unpinned check would flip red on an image bump
+# with no code change, and would disagree with whatever developers have
+# installed locally. Upgrade deliberately: bump the pin, re-run
+# `clang-format -i` over the tree, commit both together, and add the
+# commit to .git-blame-ignore-revs.
 #
-# That includes clang-format: .clang-format has sat in the repository
-# without anything enforcing it, so the tree has never been checked
-# against it and almost certainly needs one mechanical pass.
-#
-# To turn each into a gate once its output has been triaged:
-#   clang-format  run `clang-format -i` over the tree once, then drop
-#                 `continue-on-error` from the format job
-#   clang-tidy    fix or suppress what it reports, then delete the
-#                 `|| true` in the "Run clang-tidy" step
-#   CodeQL        findings land in the Security tab; enable required
-#                 code-scanning checks in branch protection
+# clang-tidy and CodeQL are still reporting-only. Neither has been
+# triaged against this codebase yet, and a gate that goes red on day one
+# for reasons nobody has read just teaches everyone to ignore it.
+# To promote them:
+#   clang-tidy  fix or suppress what it reports, then delete the
+#               `|| true` in the "Run clang-tidy" step
+#   CodeQL      findings land in the Security tab; enable required
+#               code-scanning checks in branch protection
 
 on:
   push:
@@ -43,12 +44,14 @@ jobs:
   format:
     name: clang-format
     runs-on: ubuntu-latest
-    continue-on-error: true   # see the header comment; blocking later
+    env:
+      # Keep in step with the pin in the header comment above.
+      CLANG_FORMAT_VERSION: 18.1.3
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Install a pinned clang-format
+        run: pipx install "clang-format==${CLANG_FORMAT_VERSION}"
 
       - name: Check formatting
         run: |
@@ -58,8 +61,8 @@ jobs:
                     \( -name '*.hpp' -o -name '*.cpp' \) | sort)
           echo "checking $(echo "$files" | wc -l) files against .clang-format"
 
-          # Report which files differ, and by how much, rather than just
-          # failing: the first run is expected to have work to do.
+          # Report which files differ, and by how much, rather than only
+          # that something does.
           dirty=""
           for f in $files; do
             if ! clang-format --dry-run --Werror "$f" >/dev/null 2>&1; then
@@ -80,9 +83,10 @@ jobs:
               printf "%b" "$dirty"
               echo '```'
               echo ""
-              echo "Fix in one pass:"
+              echo "Fix in one pass, with the same version CI uses:"
               echo ""
               echo '```sh'
+              echo "pipx install 'clang-format==${CLANG_FORMAT_VERSION}'"
               echo "clang-format -i \$(find include tests examples tools \\"
               echo "  -type f \\( -name '*.hpp' -o -name '*.cpp' \\))"
               echo '```'
@@ -91,7 +95,7 @@ jobs:
 
           if [ -n "$dirty" ]; then
             printf "%b" "$dirty"
-            echo "::warning::Some files differ from .clang-format (non-blocking for now)."
+            echo "::error::Some files differ from .clang-format."
             exit 1
           fi
           echo "All files match .clang-format."
