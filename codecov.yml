@@ -3,26 +3,34 @@
 # The uploaded report comes from tools/coverage.py, which merges gcov
 # records across translation units and template instantiations. Do not
 # replace it with a raw gcovr upload: this project is header-only and
-# templated, so unmerged records report roughly 58% instead of 91%.
+# templated, so unmerged records report roughly 58% rather than the
+# ~87% of lines that are actually fully covered.
 
 coverage:
   precision: 1
   round: nearest
   range: "80...95"
 
+  # Both statuses are informational: Codecov reports the number and the
+  # delta, but never fails a commit.
+  #
+  # The gate lives in the coverage job in .github/workflows/ci.yml, which
+  # measures with a pinned compiler and a pinned metric. A second gate
+  # here, evaluated by a different service against whatever codecov.yml
+  # happened to say at the time of the commit, can only contradict it —
+  # and a red check next to green Actions jobs is worse than no check,
+  # because it is unclear which one to believe.
   status:
     project:
       default:
-        # Mirrors the --fail-under-line floor in .github/workflows/ci.yml.
-        # Both are measured with the compiler pinned there; the number is
-        # not comparable against a different GCC.
-        target: 85%
+        target: 85%       # mirrors --fail-under-line in ci.yml
         threshold: 1%
+        informational: true
     patch:
       default:
-        # New and changed lines should arrive tested.
-        target: 90%
+        target: 90%       # new and changed lines should arrive tested
         threshold: 5%
+        informational: true
 
 # Only the shipped library is measured. Tests and examples are the thing
 # doing the measuring, and counting them flatters the number.
