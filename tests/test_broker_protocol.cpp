@@ -342,3 +342,96 @@ TEST(app_publish_rejects_a_payload_that_could_never_be_built) {
     CHECK(x.b.publish("big/one", ByteSpan{huge, sizeof huge}, QoS::at_most_once, false) ==
           Err::oversize);
 }
+
+// ------------------------------------- server-assigned identifiers
+
+TEST(assigned_client_ids_avoid_ones_already_in_use) {
+    // A zero-byte client id makes the broker invent one, "mmq-<n>". The
+    // counter is not authoritative — a client is free to connect as
+    // "mmq-1" itself — so the broker must check for a collision and try
+    // again rather than hand out a duplicate and merge two sessions.
+    Bed x;
+    connected(x, 0, "mmq-1");  // squat on the first name the broker would pick
+
+    wire::ConnectOpts clean;
+    x.connect(1, "", clean);
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+
+    // The squatter keeps its own session: a publish to a filter only it
+    // subscribed to must not reach the newcomer.
+    x.feed(0, wire::make_subscribe(1, {{"squat/#", 0}}));
+    const uint8_t codes[] = {0};
+    expect_suback(x.t, 0, 1, codes);
+
+    x.connect(2, "pub");
+    expect_connack(x.t, 2, false, ConnackCode::accepted);
+    x.feed(2, wire::make_publish("squat/x", wire::bs("hi")));
+
+    expect_publish(x.t, 0, "squat/x", wire::bs("hi"), QoS::at_most_once, false);
+    expect_silence(x.t, 1);  // the assigned id got a session of its own
+}
+
+// -------------------------------------- delivery stops on a dead link
+
+namespace {
+
+// Accepts the first `ok_sends` sends, then fails — the shape of a
+// connection whose output buffer overflows partway through a flush.
+template <size_t MaxConns>
+struct FlakyTransport {
+    static constexpr size_t max_connections = MaxConns;
+    CaptureTransport<MaxConns> log;
+    int ok_sends = 1000;
+
+    bool send(size_t ci, ByteSpan b) {
+        if (ok_sends <= 0) {
+            return false;
+        }
+        --ok_sends;
+        return log.send(ci, b);
+    }
+    void close(size_t ci) { log.close(ci); }
+};
+
+}  // namespace
+
+TEST(queued_delivery_stops_as_soon_as_the_connection_dies) {
+    // A send failure means the connection is beyond saving. The broker
+    // must abandon the rest of that session's queue rather than keep
+    // building and pushing packets into a socket that is already gone.
+    using Transport = FlakyTransport<SmallTraits::max_connections>;
+    Transport t;
+    Broker<SmallTraits, Transport> broker{t};
+
+    // Subscriber on a persistent session, granted QoS 1 so deliveries
+    // are queued rather than passed straight through.
+    CHECK(broker.conn_open(0, 1000) == Err::ok);
+    wire::ConnectOpts persistent;
+    persistent.clean = false;
+    broker.conn_data(0, wire::make_connect("sub", persistent).span(), 1000);
+    broker.conn_data(0, wire::make_subscribe(1, {{"q/#", 1}}).span(), 1000);
+
+    // Go offline; messages published now pile up in the session queue.
+    broker.conn_closed(0);
+
+    CHECK(broker.conn_open(1, 1000) == Err::ok);
+    broker.conn_data(1, wire::make_connect("pub").span(), 1000);
+    for (int i = 0; i < 3; ++i) {
+        broker.conn_data(1,
+                         wire::make_publish("q/x", wire::bs("m"), QoS::at_least_once, false, false,
+                                            static_cast<uint16_t>(i + 1))
+                             .span(),
+                         1000);
+    }
+
+    // Reconnect with a transport that dies on the very first write, so
+    // the resume flush aborts instead of walking the whole queue.
+    t.log.logs[0].len = 0;
+    t.log.logs[0].rpos = 0;
+    t.ok_sends = 0;
+    CHECK(broker.conn_open(0, 2000) == Err::ok);
+    broker.conn_data(0, wire::make_connect("sub", persistent).span(), 2000);
+
+    CHECK_EQ(t.log.logs[0].len, 0u);  // not even the CONNACK got through
+    CHECK(t.log.logs[0].closed);      // and the broker tore the link down
+}

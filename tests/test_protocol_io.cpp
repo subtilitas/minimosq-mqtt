@@ -120,3 +120,66 @@ TEST(first_byte_helpers) {
     CHECK(!fixed_flags_valid(PacketType::connect, 0x01));
     CHECK(fixed_flags_valid(PacketType::publish, 0x0D));  // PUBLISH flags are free-form here
 }
+
+// ------------------------------------------ sticky failure, in detail
+//
+// Reader and Writer promise that once a read or write runs past the end,
+// every later call is a no-op returning an empty/zero value. Parsing
+// code leans on that to stay linear — it checks ok() once at the end
+// instead of after every field — so the promise has to hold for the
+// compound accessors too, not just the primitive ones.
+
+TEST(reader_compound_reads_are_no_ops_after_failure) {
+    const uint8_t raw[] = {0x00, 0x02, 'h', 'i'};
+    Reader r{ByteSpan{raw, sizeof raw}};
+
+    CHECK(r.len_prefixed_bytes() == ByteSpan(raw + 2, 2));
+    CHECK(r.ok());
+    CHECK(r.at_end());
+
+    // Reading past the end trips the sticky flag...
+    (void)r.u8();
+    CHECK(!r.ok());
+
+    // ...and every compound accessor then yields nothing without
+    // touching the buffer.
+    CHECK(r.len_prefixed_bytes().empty());
+    CHECK(r.utf8().empty());
+    CHECK(r.rest().empty());
+    CHECK(r.bytes(1).empty());
+    CHECK(!r.ok());
+}
+
+TEST(reader_rejects_a_length_prefix_longer_than_the_buffer) {
+    // The prefix announces 8 bytes but only 2 follow: a truncated
+    // packet, not a short string.
+    const uint8_t raw[] = {0x00, 0x08, 'h', 'i'};
+    Reader r{ByteSpan{raw, sizeof raw}};
+    CHECK(r.len_prefixed_bytes().empty());
+    CHECK(!r.ok());
+}
+
+TEST(writer_refuses_a_string_longer_than_the_wire_allows) {
+    // MQTT strings carry a 16-bit length, so anything above 65535 has no
+    // representation. The check is on the length alone, so it can be
+    // exercised without allocating 64 KB.
+    uint8_t buf[8];
+    Writer w{buf, sizeof buf};
+    const char text[] = "irrelevant";
+    w.utf8(StrView{text, 65536});
+    CHECK(!w.ok());
+    CHECK_EQ(w.size(), 0u);  // nothing was written
+}
+
+TEST(writer_refuses_a_varint_beyond_the_remaining_length_maximum) {
+    uint8_t buf[8];
+    Writer w{buf, sizeof buf};
+    w.varint(max_remaining_length + 1);
+    CHECK(!w.ok());
+    CHECK_EQ(w.size(), 0u);
+
+    Writer ok{buf, sizeof buf};
+    ok.varint(max_remaining_length);
+    CHECK(ok.ok());
+    CHECK_EQ(ok.size(), 4u);
+}

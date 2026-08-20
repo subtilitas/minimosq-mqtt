@@ -48,6 +48,41 @@ The rules that matter:
 The full contract, including the reasoning, is documented in
 [`include/minimosq/transport.hpp`](include/minimosq/transport.hpp).
 
+### Publish your capacity
+
+A transport may declare how many slots it has:
+
+```cpp
+static constexpr size_t max_connections = MaxConns;
+```
+
+When it does, `Broker` `static_assert`s that the number is at least
+`Traits::max_connections`. This is worth doing. The broker hands out
+indices in `[0, Traits::max_connections)`, and nothing else forces the
+two numbers to agree — `TcpTransport<8>` under a traits type with
+`max_connections = 16` compiles perfectly and writes past the end of the
+slot array. With the constant published, that combination fails to
+build instead. Transports that stay silent are assumed to be sized
+correctly.
+
+The bundled transports also bounds-check the index at run time and
+refuse one that is out of range, rather than trusting the caller.
+
+### Do not drain one connection forever
+
+`StreamServerTransport` and `PipeTransport` cap how many reads they take
+from a single connection per poll pass:
+
+```cpp
+static constexpr int max_reads_per_pass = 8;
+```
+
+Reading until `EAGAIN` sounds tidier, but a peer that keeps its socket
+full then starves every other connection *and* stops `tick()` from
+running, which is what drives the keep-alive and handshake timeouts.
+Whatever is left stays readable and the next `poll()` picks it up. A
+transport you write yourself wants the same bound.
+
 ## Bundled transports
 
 All POSIX-only, and all examples rather than core:
@@ -64,6 +99,33 @@ All POSIX-only, and all examples rather than core:
 socket is created; everything else — accept handling, per-connection
 output ring, slow-consumer detection, `EINTR`/`EAGAIN` handling — lives in
 `StreamServerTransport`.
+
+### Opening a listener
+
+```cpp
+// TCP. Port 0 lets the OS pick one; read it back with port().
+bool open(uint16_t port, const char* bind_addr = nullptr);
+
+// Unix domain socket. The mode is applied to the socket file.
+bool open(const char* path, mode_t mode = 0600);
+```
+
+`bind_addr` restricts the listening interface and defaults to all of
+them. MQTT 3.1.1 has no transport security of its own, so a broker
+without TLS underneath should usually not be reachable from the network:
+
+```cpp
+transport.open(1883, "127.0.0.1");   // local processes only
+```
+
+An address that does not parse makes `open()` fail rather than quietly
+falling back to every interface.
+
+The unix-socket `mode` defaults to `0600`, because this transport's
+entire security story is filesystem permissions and inheriting a typical
+umask would leave the socket connectable by every local user. Widen it
+deliberately — `0660` with a shared group — if clients run as someone
+else.
 
 ## Writing your own
 

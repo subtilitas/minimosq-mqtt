@@ -49,7 +49,44 @@ documented in `tls_adapter.hpp`; in short:
 | `on_ciphertext()`| feed wire bytes in; may yield decrypted app data and/or handshake records to transmit |
 | `encrypt()`      | wrap outbound app data into TLS records               |
 
-Returning `false` from either I/O hook drops the connection.
+Returning `false` from either I/O hook drops the connection: the adapter
+closes the raw transport and tells the broker, so a fatal TLS error ends
+the connection at both ends rather than leaving half of it alive.
+
+### Reaching a connection's engine
+
+The engines live inside the adapter, one per slot. Real engines need
+configuring — a certificate chain, a private key, a session cache — so
+the adapter hands them out:
+
+```cpp
+if (MyTlsEngine* e = tls.engine(ci)) {
+    e->load_certificate(cert, key);
+}
+```
+
+`engine()` returns `nullptr` for an index outside the adapter's
+capacity rather than indexing past the array, so the result is worth
+checking even though a correct transport never asks for one.
+
+Slots are reused: `conn_open` calls `reset()` on the engine before the
+broker sees the connection, so per-connection state from the previous
+client is gone by the time you are handed it. Anything that should
+outlive a connection — a certificate, a session cache — belongs outside
+the engine or must survive `reset()`.
+
+Like the raw transports, the adapter publishes
+`static constexpr size_t max_connections`, so `Broker` checks at compile
+time that it has room for every index the broker will hand out.
+
+### Buffers
+
+The adapter owns its record buffers rather than putting them on the
+stack: two of `BufSize` for the inbound path and one for the outbound.
+At the default 4096 that is 12 KB in the adapter instead of 8 KB of
+stack at the deepest point of the call chain, which matters on the
+embedded targets this library aims at. The transport contract is
+single-threaded, so sharing them is safe.
 
 ## Mapping to mbedTLS (sketch)
 

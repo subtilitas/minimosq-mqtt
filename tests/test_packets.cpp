@@ -310,3 +310,45 @@ TEST(builders_reject_a_buffer_that_is_too_small) {
     CHECK(build_packet_id_only(buf, sizeof buf, PacketType::puback, 1).empty());
     CHECK(build_pingresp(buf, 1).empty());
 }
+
+TEST(every_builder_refuses_a_buffer_that_is_too_small) {
+    // Each builder writes its body at buf + packet_overhead, so a buffer
+    // that cannot hold the header plus the body must yield an empty
+    // span rather than a packet that runs off the end.
+    uint8_t tiny[packet_overhead + 1];
+
+    CHECK(build_connack(tiny, sizeof tiny, false, ConnackCode::accepted).empty());
+    CHECK(build_packet_id_only(tiny, sizeof tiny, PacketType::puback, 1).empty());
+    CHECK(build_pingresp(tiny, 1).empty());
+
+    // build_publish has room for the header but not the topic.
+    uint8_t small[packet_overhead + 2];
+    CHECK(build_publish(small, sizeof small, "a/long/topic", wire::bs("payload"), QoS::at_most_once,
+                        false, false, 0)
+              .empty());
+    // Nor for the packet identifier a QoS 1 publish adds.
+    uint8_t just_topic[packet_overhead + 2 + 1];
+    CHECK(build_publish(just_topic, sizeof just_topic, "t", ByteSpan{}, QoS::at_least_once, false,
+                        false, 1)
+              .empty());
+
+    // Exactly enough is accepted, so the checks are not simply refusing
+    // everything.
+    uint8_t enough[packet_overhead + 2];
+    CHECK(!build_connack(enough, sizeof enough, true, ConnackCode::bad_credentials).empty());
+}
+
+TEST(topic_list_parser_reports_a_truncated_entry) {
+    // A filter whose announced length runs past the end of the packet is
+    // truncation, not an empty list.
+    uint8_t body[8];
+    Writer w{body, sizeof body};
+    w.u16(1);   // packet id
+    w.u16(32);  // announces a 32-byte filter
+    w.u8('a');  // supplies one
+    TopicListParser p{ByteSpan{body, w.size()}, /*with_qos=*/true};
+    StrView filter;
+    QoS q = QoS::at_most_once;
+    CHECK(!p.next(filter, q));
+    CHECK(p.status() == Err::truncated);
+}
