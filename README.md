@@ -1,7 +1,7 @@
 # minimosq
 
-[![CI](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml/badge.svg)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml)
-[![Analysis](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/analysis.yml/badge.svg)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/analysis.yml)
+[![CI](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/ci.yml?query=branch%3Amain)
+[![Analysis](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/analysis.yml/badge.svg?branch=main&event=push)](https://github.com/subtilitas/minimosq-mqtt/actions/workflows/analysis.yml?query=branch%3Amain)
 [![codecov](https://codecov.io/gh/subtilitas/minimosq-mqtt/branch/main/graph/badge.svg)](https://codecov.io/gh/subtilitas/minimosq-mqtt)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
