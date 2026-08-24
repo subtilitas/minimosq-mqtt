@@ -1,8 +1,9 @@
 // minimosq — the broker core.
 //
-// Broker<Traits, Transport, Security> is a single-threaded MQTT 3.1.1
-// broker. All state lives inside the object (sized by Traits at compile
-// time); after construction it never allocates and never throws.
+// Broker<Traits, Transport, Security, Observer> is a single-threaded
+// MQTT 3.1.1 broker. All state lives inside the object (sized by Traits
+// at compile time); after construction it never allocates and never
+// throws.
 //
 // The transport drives the broker through four entry points:
 //
@@ -30,6 +31,10 @@
 // deferred to flush_dead() at the tail of each entry point, so nothing
 // reenters the packet-build buffer while a message is being routed.
 //
+// Observability: every decision worth recording is reported through the
+// Observer policy (see observer.hpp). The default records nothing and
+// costs nothing.
+//
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_BROKER_BROKER_HPP
 #define MINIMOSQ_BROKER_BROKER_HPP
@@ -47,6 +52,7 @@
 #include "../protocol/writer.hpp"
 #include "../topic.hpp"
 #include "config.hpp"
+#include "observer.hpp"
 #include "retained.hpp"
 #include "session.hpp"
 
@@ -99,7 +105,7 @@ struct AllowAllSecurity {
 
 // ------------------------------------------------ optional trait probes
 //
-// Both members below were added after the initial release. Detecting
+// The members below were added after the initial release. Detecting
 // them instead of requiring them keeps existing user-written Traits
 // compiling unchanged.
 
@@ -110,6 +116,15 @@ struct traits_max_idle_ms {
 template <typename T>
 struct traits_max_idle_ms<T, decltype((void)T::max_idle_ms)> {
     static constexpr uint32_t value = T::max_idle_ms;
+};
+
+template <typename T, typename = void>
+struct traits_session_expiry_ms {
+    static constexpr uint32_t value = 0;
+};
+template <typename T>
+struct traits_session_expiry_ms<T, decltype((void)T::session_expiry_ms)> {
+    static constexpr uint32_t value = T::session_expiry_ms;
 };
 
 // A transport that publishes its connection capacity lets the broker
@@ -124,7 +139,8 @@ struct transport_max_connections<T, decltype((void)T::max_connections)> {
     static constexpr size_t value = T::max_connections;
 };
 
-template <typename Traits, typename Transport, typename Security = AllowAllSecurity>
+template <typename Traits, typename Transport, typename Security = AllowAllSecurity,
+          typename Observer = NullObserver>
 class Broker {
     // A transport with fewer slots than the broker hands out indices for
     // is an out-of-bounds write waiting to happen, and nothing about the
@@ -143,6 +159,7 @@ public:
     Broker& operator=(const Broker&) = delete;
 
     Security& security() noexcept { return security_; }
+    Observer& observer() noexcept { return observer_; }
 
     // ------------------------------------------------ transport-side API
 
@@ -155,6 +172,7 @@ public:
         c.reset();
         c.active = true;
         c.deadline_ms = now_ms + Traits::connect_timeout_ms;
+        notify_conn(EventKind::connection_opened, ci);
         return Err::ok;
     }
 
@@ -188,6 +206,7 @@ public:
             return on_packet(ci, first_byte, body);
         });
         if (e != Err::ok) {
+            notify_violation(ci, e);
             c.dead = true;  // framing error: abnormal disconnect, will fires
         }
         flush_dead();
@@ -204,10 +223,18 @@ public:
             }
             const bool armed = (c.session == no_session) || c.keepalive_s > 0 || max_idle_ms > 0;
             if (armed && deadline_passed(now_ms, c.deadline_ms)) {
+                if (c.session == no_session) {
+                    notify_conn(EventKind::connect_timeout, i);
+                } else if (c.keepalive_s > 0) {
+                    notify_conn(EventKind::keepalive_timeout, i);
+                } else {
+                    notify_conn(EventKind::idle_timeout, i);
+                }
                 c.dead = true;  // abnormal: will fires [MQTT-3.1.2-24]
             }
         }
         flush_dead();
+        expire_sessions(now_ms);
     }
 
     // ---------------------------------------------- application-side API
@@ -217,6 +244,12 @@ public:
     Err publish(StrView topic, ByteSpan payload, QoS qos, bool retain) {
         if (!topic_name_valid(topic)) {
             return Err::malformed;
+        }
+        // Same rule the client path enforces: a topic too long to own
+        // could not be retained or queued, so it is refused rather than
+        // delivered to some subscribers and not others.
+        if (topic.len > Traits::max_topic_len) {
+            return Err::oversize;
         }
         // 2-byte topic length prefix, the topic, the packet identifier
         // that QoS > 0 adds, and the payload.
@@ -262,6 +295,95 @@ private:
     // ---------------------------------------------------------- helpers
 
     static constexpr uint32_t max_idle_ms = traits_max_idle_ms<Traits>::value;
+    static constexpr uint32_t session_expiry_ms = traits_session_expiry_ms<Traits>::value;
+
+    // ---------------------------------------------------- observability
+    //
+    // One helper per shape of event, so call sites stay one line and the
+    // Event stays a local the optimizer can fold away entirely when the
+    // Observer's on_event() is empty.
+
+    void notify(EventKind kind) {
+        Event e{kind};
+        observer_.on_event(e);
+    }
+
+    // A connection-scoped event; picks up the client id when the
+    // connection has got as far as having a session.
+    void notify_conn(EventKind kind, size_t ci) {
+        Event e{kind};
+        e.ci = ci;
+        if (const SessionT* s = session_of(conns_[ci])) {
+            e.client_id = s->client_id.view();
+        }
+        observer_.on_event(e);
+    }
+
+    // Mark a connection dead because of a protocol error, reporting it
+    // first. Every close the broker initiates for a peer's mistake goes
+    // through here, so an observer sees them all.
+    void violation(size_t ci, Err err) {
+        notify_violation(ci, err);
+        conns_[ci].dead = true;
+    }
+
+    void notify_violation(size_t ci, Err err) {
+        Event e{EventKind::protocol_violation};
+        e.ci = ci;
+        e.err = err;
+        if (const SessionT* s = session_of(conns_[ci])) {
+            e.client_id = s->client_id.view();
+        }
+        observer_.on_event(e);
+    }
+
+    void notify_refused(size_t ci, StrView client_id, ConnackCode code) {
+        Event e{EventKind::connect_refused};
+        e.ci = ci;
+        e.client_id = client_id;
+        e.connack = code;
+        observer_.on_event(e);
+    }
+
+    void notify_session(EventKind kind, const SessionT& s) {
+        Event e{kind};
+        e.client_id = s.client_id.view();
+        if (s.connected()) {
+            e.ci = s.conn;
+        }
+        observer_.on_event(e);
+    }
+
+    void notify_denied(EventKind kind, const SessionT& s, StrView topic) {
+        Event e{kind};
+        e.client_id = s.client_id.view();
+        e.topic = topic;
+        if (s.connected()) {
+            e.ci = s.conn;
+        }
+        observer_.on_event(e);
+    }
+
+    void notify_topic(EventKind kind, StrView topic) {
+        Event e{kind};
+        e.topic = topic;
+        observer_.on_event(e);
+    }
+
+    // A QoS>0 delivery the broker accepted responsibility for and then
+    // could not make: err is oversize (too large to own) or capacity
+    // (the session's queue is full).
+    void notify_drop(const SessionT& s, StrView topic, QoS qos, Err err) {
+        Event e{EventKind::delivery_dropped};
+        e.client_id = s.client_id.view();
+        e.topic = topic;
+        e.qos = qos;
+        e.err = err;
+        if (s.connected()) {
+            e.ci = s.conn;
+        }
+        observer_.on_event(e);
+    }
 
     static constexpr uint32_t keepalive_window_ms(uint16_t keepalive_s) noexcept {
         // The server must allow one and a half keep-alive periods
@@ -324,6 +446,7 @@ private:
             return;
         }
         if (!tr_.send(ci, pkt)) {
+            notify_conn(EventKind::transport_send_failed, ci);
             c.dead = true;  // abnormal disconnect: will fires
         }
     }
@@ -348,10 +471,52 @@ private:
         }
     }
 
+    // ------------------------------------------------- session lifetime
+    //
+    // MQTT 3.1.1 has no session expiry: a clean-session=0 session is
+    // meant to live until its client returns. Taken literally that lets
+    // a client fill max_sessions with sessions nothing will ever come
+    // back for, leaving no connection to reclaim and every later client
+    // refused. The two mechanisms below bound that. The timer is the
+    // policy; the eviction is the guarantee that a full pool never means
+    // a refused client.
+
+    void expire_sessions(uint32_t now_ms) {
+        if (session_expiry_ms == 0) {
+            return;
+        }
+        sessions_.for_each([&](SessionT& s) {
+            if (s.connected()) {
+                return;
+            }
+            if (deadline_passed(now_ms, s.disconnect_ms + session_expiry_ms)) {
+                notify_session(EventKind::session_expired, s);
+                sessions_.release(&s);  // releasing during for_each is safe
+            }
+        });
+    }
+
+    // The disconnected session that has been gone longest, or nullptr if
+    // every session currently has a connection.
+    SessionT* oldest_disconnected_session() noexcept {
+        SessionT* oldest = nullptr;
+        sessions_.for_each([&](SessionT& s) {
+            if (s.connected()) {
+                return;
+            }
+            if (oldest == nullptr ||
+                static_cast<int32_t>(s.disconnect_order - oldest->disconnect_order) < 0) {
+                oldest = &s;
+            }
+        });
+        return oldest;
+    }
+
     void teardown(size_t ci) {
         Conn& c = conns_[ci];
         SessionT* s = session_of(c);
         const bool notify = c.notify_transport;
+        notify_conn(EventKind::connection_closed, ci);
 
         // Detach first: nothing published below may reach this connection.
         c.active = false;
@@ -360,6 +525,11 @@ private:
 
         if (s != nullptr) {
             s->conn = SessionT::no_conn;
+            // Stamped even for clean sessions (released just below) so
+            // there is one place that records "this session lost its
+            // connection at T".
+            s->disconnect_ms = now_ms_;
+            s->disconnect_order = ++disconnect_order_;
             if (s->has_will) {
                 // Publish the will exactly like a client PUBLISH
                 // [MQTT-3.1.2-8]: same authorization, retained if
@@ -388,12 +558,23 @@ private:
     // ------------------------------------------------------ publishing
 
     // Store/remove a retained message; best-effort, see RetainedStore.
+    // Returns false when the new value was not stored — in which case
+    // any previous value for the topic has been purged rather than left
+    // behind to be served as if it were current.
     bool apply_retain(StrView topic, ByteSpan payload, QoS qos) {
         if (payload.empty()) {
             retained_.remove(topic);  // [MQTT-3.3.1-10]
             return true;
         }
-        return retained_.set(topic, payload, qos);
+        const RetainStatus st = retained_.set(topic, payload, qos);
+        if (st == RetainStatus::stale_purged) {
+            notify_topic(EventKind::retained_stale_purged, topic);
+        }
+        if (st != RetainStatus::stored) {
+            notify_topic(EventKind::retained_store_failed, topic);
+            return false;
+        }
+        return true;
     }
 
     // Deliver a message to every matching subscriber. Each session gets
@@ -416,6 +597,7 @@ private:
                 return;
             }
             if (!security_.authorize_receive(s.auth_ctx, topic)) {
+                notify_denied(EventKind::receive_denied, s, topic);
                 return;  // this subscriber is not cleared for the topic
             }
             const bool online = s.connected() && !conns_[s.conn].dead;
@@ -434,15 +616,24 @@ private:
     // Append a QoS 1/2 delivery to a session's queue and, if the client
     // is online, put it on the wire.
     void enqueue(SessionT& s, StrView topic, ByteSpan payload, QoS eff, bool retain) {
-        if (topic.len > Traits::max_topic_len || payload.len > Traits::max_payload_len) {
+        // Topic length is no longer a case here: a PUBLISH or will whose
+        // topic exceeds max_topic_len is refused at the point it enters
+        // the broker, so every topic that reaches routing fits in owned
+        // storage. Payload still can be larger, because QoS 0 delivery is
+        // bounded by max_packet_size rather than max_payload_len and
+        // passing those straight through is deliberate.
+        if (payload.len > Traits::max_payload_len) {
             // Documented policy: too large for owned storage — this
-            // subscriber is skipped. Size max_payload_len >=
+            // subscriber is skipped. Set max_payload_len >=
             // max_packet_size to rule this out entirely.
+            notify_drop(s, topic, eff, Err::oversize);
             return;
         }
         typename SessionT::OutMsg* m = s.pending.emplace_back();
         if (m == nullptr) {
-            return;  // queue full: the newest message is dropped (documented)
+            // Queue full: the newest message is dropped (documented).
+            notify_drop(s, topic, eff, Err::capacity);
+            return;
         }
         m->topic.assign(topic);
         m->payload.assign(payload);
@@ -505,15 +696,15 @@ private:
     // Returns false to make the frame parser stop feeding us (the
     // connection is being torn down).
     bool on_packet(size_t ci, uint8_t first_byte, ByteSpan body) {
-        Conn& c = conns_[ci];
+        const Conn& c = conns_[ci];
         const PacketType type = packet_type(first_byte);
 
         if (!fixed_flags_valid(type, packet_flags(first_byte))) {
-            c.dead = true;  // [MQTT-2.2.2-2]
+            violation(ci, Err::malformed);  // [MQTT-2.2.2-2]
             return false;
         }
         if (c.session == no_session && type != PacketType::connect) {
-            c.dead = true;  // first packet must be CONNECT [MQTT-3.1.0-1]
+            violation(ci, Err::state);  // first packet must be CONNECT [MQTT-3.1.0-1]
             return false;
         }
 
@@ -544,7 +735,7 @@ private:
             break;
         case PacketType::pingreq:
             if (!body.empty()) {
-                c.dead = true;
+                violation(ci, Err::malformed);
             } else {
                 send_to(ci, build_pingresp(out_, sizeof out_));
             }
@@ -555,7 +746,7 @@ private:
         default:
             // CONNACK/SUBACK/UNSUBACK/PINGRESP (server-to-client only)
             // or reserved types: protocol violation.
-            c.dead = true;
+            violation(ci, Err::malformed);
             break;
         }
         return !conns_[ci].dead;
@@ -563,8 +754,11 @@ private:
 
     // ------------------------------------------------------- handlers
 
-    // Send a CONNACK refusal and drop the connection.
-    void refuse(size_t ci, ConnackCode code) {
+    // Send a CONNACK refusal and drop the connection. The client id is
+    // passed in because the connection has no session yet, so there is
+    // nowhere else for the observer to learn who was turned away.
+    void refuse(size_t ci, ConnackCode code, StrView client_id = StrView{}) {
+        notify_refused(ci, client_id, code);
         send_to(ci, build_connack(out_, sizeof out_, false, code));
         conns_[ci].dead = true;
     }
@@ -572,16 +766,18 @@ private:
     void handle_connect(size_t ci, ByteSpan body) {
         Conn& c = conns_[ci];
         if (c.session != no_session) {
-            c.dead = true;  // a second CONNECT is a violation [MQTT-3.1.0-2]
+            violation(ci, Err::state);  // a second CONNECT [MQTT-3.1.0-2]
             return;
         }
 
         ConnectPacket p;
         if (parse_connect(body, p) != Err::ok) {
+            notify_violation(ci, Err::malformed);
             c.dead = true;
             return;
         }
         if (!p.protocol_name_ok) {
+            notify_violation(ci, Err::malformed);
             c.dead = true;  // close without CONNACK [MQTT-3.1.2-1]
             return;
         }
@@ -596,29 +792,31 @@ private:
         StrView client_id = p.client_id;
         if (client_id.empty()) {
             if (!p.clean_session) {
-                refuse(ci, ConnackCode::identifier_rejected);
+                refuse(ci, ConnackCode::identifier_rejected, client_id);
                 return;
             }
             client_id = generate_client_id(auto_id_buf);
         }
         if (client_id.len > Traits::max_client_id_len) {
-            refuse(ci, ConnackCode::identifier_rejected);
+            refuse(ci, ConnackCode::identifier_rejected, client_id);
             return;
         }
         // Ill-formed UTF-8 anywhere requires closing the connection
         // [MQTT-1.5.3-1/-2]. (Passwords are binary data.)
         if (!utf8_valid(client_id) || (p.has_username && !utf8_valid(p.username))) {
+            notify_violation(ci, Err::malformed);
             c.dead = true;
             return;
         }
         if (p.has_will) {
             if (!topic_name_valid(p.will_topic)) {
+                notify_violation(ci, Err::malformed);
                 c.dead = true;  // will topic must be a valid name [MQTT-3.1.3.1]
                 return;
             }
             if (p.will_topic.len > Traits::max_topic_len ||
                 p.will_payload.len > Traits::max_payload_len) {
-                refuse(ci, ConnackCode::server_unavailable);  // capacity policy
+                refuse(ci, ConnackCode::server_unavailable, client_id);  // capacity policy
                 return;
             }
         }
@@ -627,7 +825,7 @@ private:
             security_.authenticate(client_id, p.has_username ? &p.username : nullptr,
                                    p.has_password ? &p.password : nullptr, auth_ctx);
         if (ac != ConnackCode::accepted) {
-            refuse(ci, ac);
+            refuse(ci, ac, client_id);
             return;
         }
 
@@ -637,6 +835,7 @@ private:
         // Session takeover: an existing connection with this client id is
         // dropped like a network failure (its will fires) [MQTT-3.1.4-2].
         if (existing != nullptr && existing->connected()) {
+            notify_session(EventKind::session_taken_over, *existing);
             conns_[existing->conn].dead = true;
             flush_dead();
             existing = sessions_.find([&](SessionT& s) { return s.client_id.equals(client_id); });
@@ -656,7 +855,21 @@ private:
         if (s == nullptr) {
             s = sessions_.alloc();
             if (s == nullptr) {
-                refuse(ci, ConnackCode::server_unavailable);
+                // The pool is full. Every session in it that still has a
+                // connection is in use, but a disconnected persistent
+                // session is only a promise to a client that may never
+                // come back — and MQTT 3.1.1 gives it no expiry, so
+                // without this the first max_sessions clients to
+                // disconnect lock the broker shut. Break the oldest such
+                // promise rather than refuse the client in front of us.
+                if (SessionT* victim = oldest_disconnected_session()) {
+                    notify_session(EventKind::session_evicted, *victim);
+                    sessions_.release(victim);
+                    s = sessions_.alloc();
+                }
+            }
+            if (s == nullptr) {
+                refuse(ci, ConnackCode::server_unavailable, client_id);
                 return;
             }
             s->client_id.assign(client_id);
@@ -677,6 +890,8 @@ private:
         c.keepalive_s = p.keepalive_s;
         refresh_deadline(c, now_ms_);
 
+        notify_session(session_present ? EventKind::session_resumed : EventKind::session_created,
+                       *s);
         send_to(ci, build_connack(out_, sizeof out_, session_present, ConnackCode::accepted));
 
         // Resumed persistent session: retransmit in-flight deliveries
@@ -692,7 +907,21 @@ private:
 
         PublishPacket p;
         if (parse_publish(first_byte, body, p) != Err::ok || !topic_name_valid(p.topic)) {
+            notify_violation(ci, Err::malformed);
             c.dead = true;  // [MQTT-3.3.2-2]
+            return;
+        }
+        // A topic the broker cannot own is refused outright rather than
+        // half-delivered. It could still be forwarded to QoS 0
+        // subscribers, but it could not be retained, queued for an
+        // offline session, or delivered to anyone holding a QoS>0
+        // subscription — and the publisher would be acknowledged
+        // regardless. Silently honouring a QoS 1 PUBLISH for some
+        // subscribers and not others is the worse answer; 3.1.1 has no
+        // way to say "too long", so the connection closes.
+        if (p.topic.len > Traits::max_topic_len) {
+            notify_violation(ci, Err::oversize);
+            c.dead = true;
             return;
         }
 
@@ -703,7 +932,7 @@ private:
             } else if (s.inbound_qos2.full()) {
                 // Documented capacity policy: we cannot track another id
                 // without risking duplicate delivery, so drop the client.
-                c.dead = true;
+                violation(ci, Err::capacity);
                 return;
             } else {
                 s.inbound_qos2.push_back(p.packet_id);
@@ -714,7 +943,9 @@ private:
         // acknowledged below — 3.1.1 has no error ack, and silence
         // avoids leaking topic existence [MQTT-3.3.5-2]. The QoS 2 id
         // bookkeeping above is protocol state and happens regardless.
-        if (deliver && security_.authorize_publish(s.auth_ctx, p.topic)) {
+        if (deliver && !security_.authorize_publish(s.auth_ctx, p.topic)) {
+            notify_denied(EventKind::publish_denied, s, p.topic);
+        } else if (deliver) {
             if (p.retain) {
                 // Best-effort store [MQTT-3.3.1-5]; forwarded to current
                 // subscribers with retain=0 either way [MQTT-3.3.1-9].
@@ -732,10 +963,10 @@ private:
 
     // Client acknowledged a QoS 1 delivery: the message is done.
     void handle_puback(size_t ci, ByteSpan body) {
-        Conn& c = conns_[ci];
+        const Conn& c = conns_[ci];
         uint16_t id = 0;
         if (parse_packet_id_only(body, id) != Err::ok) {
-            c.dead = true;
+            violation(ci, Err::malformed);
             return;
         }
         SessionT& s = *session_of(c);
@@ -751,10 +982,10 @@ private:
     // duplicate PUBREC (entry already awaiting PUBCOMP) repeats the
     // PUBREL [MQTT-4.3.3].
     void handle_pubrec(size_t ci, ByteSpan body) {
-        Conn& c = conns_[ci];
+        const Conn& c = conns_[ci];
         uint16_t id = 0;
         if (parse_packet_id_only(body, id) != Err::ok) {
-            c.dead = true;
+            violation(ci, Err::malformed);
             return;
         }
         SessionT& s = *session_of(c);
@@ -769,10 +1000,10 @@ private:
 
     // Client completed a QoS 2 delivery.
     void handle_pubcomp(size_t ci, ByteSpan body) {
-        Conn& c = conns_[ci];
+        const Conn& c = conns_[ci];
         uint16_t id = 0;
         if (parse_packet_id_only(body, id) != Err::ok) {
-            c.dead = true;
+            violation(ci, Err::malformed);
             return;
         }
         SessionT& s = *session_of(c);
@@ -784,10 +1015,10 @@ private:
     }
 
     void handle_pubrel(size_t ci, ByteSpan body) {
-        Conn& c = conns_[ci];
+        const Conn& c = conns_[ci];
         uint16_t id = 0;
         if (parse_packet_id_only(body, id) != Err::ok) {
-            c.dead = true;
+            violation(ci, Err::malformed);
             return;
         }
         session_of(c)->remove_inbound_qos2(id);
@@ -812,11 +1043,13 @@ private:
             QoS requested = QoS::at_most_once;
             while (check.next(filter, requested)) {
                 if (!topic_filter_valid(filter)) {
+                    notify_violation(ci, Err::malformed);
                     c.dead = true;  // ill-formed filter [MQTT-4.7.3-1, -1.5.3-1]
                     return;
                 }
             }
             if (check.status() != Err::ok) {
+                notify_violation(ci, check.status());
                 c.dead = true;
                 return;
             }
@@ -836,6 +1069,7 @@ private:
         QoS requested = QoS::at_most_once;
         while (entries.next(filter, requested)) {
             if (!security_.authorize_subscribe(s.auth_ctx, filter)) {
+                notify_denied(EventKind::subscribe_denied, s, filter);
                 w.u8(suback_failure);  // authorization refusal [MQTT-3.8.4-5]
                 continue;
             }
@@ -849,6 +1083,7 @@ private:
             }
         }
         if (!w.ok()) {
+            notify_violation(ci, Err::oversize);
             c.dead = true;  // SUBACK does not fit: cannot answer, so close
             return;
         }
@@ -859,28 +1094,57 @@ private:
         // Driven off the session's own table rather than the packet, so
         // a subscription that merely already existed — and was refused
         // this time round — replays nothing.
-        for (typename SessionT::Subscription& sub : s.subs) {
-            if (!sub.retain_pending) {
-                continue;
-            }
-            sub.retain_pending = false;
-            retained_.for_each_match(
-                sub.filter.view(), [&](typename RetainedStore<Traits>::Entry& e) {
-                    if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
-                        return;
+        //
+        // The loop is per retained message, not per granted filter, for
+        // two reasons. It matches route_publish: a session that holds
+        // both "a/x" and "a/#" receives a live publish to a/x once, and
+        // should not receive the retained one twice. And it bounds the
+        // work: the per-filter form sent one packet per (filter, message)
+        // pair, so a single SUBSCRIBE granting K filters over R retained
+        // messages produced K*R sends — at the default traits, ~1000
+        // output bytes per input byte, enough for one socket read to
+        // monopolise a poll pass and starve tick(). This form sends at
+        // most R, whatever K is.
+        if (any_retain_pending(s)) {
+            retained_.for_each([&](typename RetainedStore<Traits>::Entry& e) {
+                bool matched = false;
+                QoS granted_max = QoS::at_most_once;
+                for (const typename SessionT::Subscription& sub : s.subs) {
+                    if (sub.retain_pending && topic_matches(sub.filter.view(), e.topic.view())) {
+                        matched = true;
+                        granted_max = qos_max(granted_max, sub.granted);
                     }
-                    // Retained delivery at min(granted, stored QoS), with
-                    // the retain flag set [MQTT-3.3.1-8].
-                    const QoS eff = qos_min(sub.granted, e.qos);
-                    if (eff == QoS::at_most_once) {
-                        send_to(ci, build_publish(out_, sizeof out_, e.topic.view(),
-                                                  e.payload.view(), QoS::at_most_once,
-                                                  /*retain=*/true, false, 0));
-                    } else {
-                        enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
-                    }
-                });
+                }
+                if (!matched) {
+                    return;
+                }
+                if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
+                    notify_denied(EventKind::receive_denied, s, e.topic.view());
+                    return;
+                }
+                // Retained delivery at min(granted, stored QoS), with the
+                // retain flag set [MQTT-3.3.1-8].
+                const QoS eff = qos_min(granted_max, e.qos);
+                if (eff == QoS::at_most_once) {
+                    send_to(ci, build_publish(out_, sizeof out_, e.topic.view(), e.payload.view(),
+                                              QoS::at_most_once, /*retain=*/true, false, 0));
+                } else {
+                    enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
+                }
+            });
         }
+        for (typename SessionT::Subscription& sub : s.subs) {
+            sub.retain_pending = false;
+        }
+    }
+
+    static bool any_retain_pending(const SessionT& s) noexcept {
+        for (const typename SessionT::Subscription& sub : s.subs) {
+            if (sub.retain_pending) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Apply a single (syntactically valid) subscription request;
@@ -906,7 +1170,7 @@ private:
     }
 
     void handle_unsubscribe(size_t ci, ByteSpan body) {
-        Conn& c = conns_[ci];
+        const Conn& c = conns_[ci];
         SessionT& s = *session_of(c);
 
         // Validate the whole packet before removing anything, so an
@@ -917,12 +1181,12 @@ private:
             QoS ignored = QoS::at_most_once;
             while (check.next(filter, ignored)) {
                 if (!topic_filter_valid(filter)) {
-                    c.dead = true;  // ill-formed filter [MQTT-4.7.3-1]
+                    violation(ci, Err::malformed);  // ill-formed filter [MQTT-4.7.3-1]
                     return;
                 }
             }
             if (check.status() != Err::ok) {
-                c.dead = true;
+                violation(ci, check.status());
                 return;
             }
         }
@@ -945,7 +1209,7 @@ private:
     void handle_disconnect(size_t ci, ByteSpan body) {
         Conn& c = conns_[ci];
         if (!body.empty()) {
-            c.dead = true;
+            violation(ci, Err::malformed);
             return;
         }
         session_of(c)->has_will = false;  // clean close discards the will [MQTT-3.14.4-3]
@@ -965,11 +1229,15 @@ private:
 
     Transport& tr_;
     Security security_{};
+    Observer observer_{};
     Conn conns_[max_connections];
     Pool<SessionT, Traits::max_sessions> sessions_;
     RetainedStore<Traits> retained_;
     uint8_t out_[out_size];
     uint32_t now_ms_ = 0;
+    // Monotonic ticket stamped on each disconnect, so "gone longest" is
+    // a total order independent of the clock.
+    uint32_t disconnect_order_ = 0;
     uint16_t auto_id_counter_ = 0;
 };
 

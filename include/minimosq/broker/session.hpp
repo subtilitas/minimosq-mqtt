@@ -78,6 +78,14 @@ struct Session {
     bool clean_session = true;
     uint16_t conn = no_conn;  // connection index while connected
 
+    // Set when the connection goes away, read only while disconnected.
+    // disconnect_ms drives Traits::session_expiry_ms; disconnect_order
+    // is a monotonic ticket that answers "which of these has been gone
+    // longest" without the wrap ambiguity a millisecond clock has once a
+    // session has been idle for more than ~24 days.
+    uint32_t disconnect_ms = 0;
+    uint32_t disconnect_order = 0;
+
     // Refreshed by authenticate() on every (re)connect.
     AuthCtx auth_ctx{};
 

@@ -1,0 +1,124 @@
+# Observability
+
+The broker decides a great many things it used to keep to itself: why a
+connection went away, which packet was a protocol violation, which
+retained message could not be stored, which delivery was dropped and for
+whom. `Observer` — the fourth `Broker` template parameter — is where
+those decisions come out.
+
+It follows the same static-polymorphism pattern as the transport and
+security policies: one method, no virtuals, no allocation. The default,
+`NullObserver`, has an empty body and optimizes away, so a broker that
+does not want events pays nothing for the seam.
+
+```cpp
+struct MyObserver {
+    void on_event(const minimosq::Event& e) noexcept {
+        log_line(minimosq::event_kind_name(e.kind), e.client_id, e.topic);
+    }
+};
+
+minimosq::Broker<Traits, Transport, minimosq::AllowAllSecurity, MyObserver>
+    broker{transport};
+
+broker.observer().set_sink(&my_sink);   // configure it like security()
+```
+
+## The contract
+
+* `on_event()` is called from inside a broker entry point, on the same
+  thread, with the broker mid-operation. **It must not call back into
+  the broker** — `publish()`, `conn_data()` and friends would reenter the
+  shared packet build buffer. Copy what you need and return.
+* Every `StrView` in an `Event` borrows broker-owned storage and is valid
+  only for the duration of the call.
+* Events are notifications, not a control point. Nothing the observer
+  does changes what the broker then does. Authorization decisions belong
+  in the [Security](Security) policy, which is a control point.
+* Adding a new `EventKind` is not a breaking change: an observer
+  switching on `kind` simply does not match the new value. That is why
+  this is one method with a tagged struct rather than a method per event.
+
+## The event
+
+```cpp
+struct Event {
+    EventKind kind;
+    size_t ci;              // connection index, or Event::no_conn
+    StrView client_id;      // empty when not known yet
+    StrView topic;          // topic name or filter, when relevant
+    Err err;                // protocol_violation, delivery_dropped
+    ConnackCode connack;    // connect_refused
+    QoS qos;                // delivery_dropped
+};
+```
+
+Which fields carry something depends on the kind; the rest hold empty
+defaults, so reading one that does not apply gives you an empty view
+rather than stale data.
+
+| Kind | Meaning | Fields beyond `kind` |
+| --- | --- | --- |
+| `connection_opened` | the transport accepted a connection | `ci` |
+| `connection_closed` | a connection is being torn down, for any reason | `ci`, `client_id` |
+| `connect_refused` | CONNACK carried a refusal code | `ci`, `client_id`, `connack` |
+| `protocol_violation` | the peer broke the protocol; the connection closes | `ci`, `client_id`, `err` |
+| `transport_send_failed` | `Transport::send()` returned false | `ci`, `client_id` |
+| `connect_timeout` | no CONNECT within `connect_timeout_ms` | `ci` |
+| `keepalive_timeout` | 1.5 × keep-alive elapsed | `ci`, `client_id` |
+| `idle_timeout` | `max_idle_ms` elapsed on a keep-alive-0 client | `ci`, `client_id` |
+| `session_created` | a new session was allocated | `ci`, `client_id` |
+| `session_resumed` | a persistent session was found and resumed | `ci`, `client_id` |
+| `session_taken_over` | a second client claimed a live client id | `ci`, `client_id` |
+| `session_expired` | `session_expiry_ms` elapsed while disconnected | `client_id` |
+| `session_evicted` | the pool was full; the oldest promise was broken | `client_id` |
+| `publish_denied` | `authorize_publish` said no | `ci`, `client_id`, `topic` |
+| `subscribe_denied` | `authorize_subscribe` said no | `ci`, `client_id`, `topic` |
+| `receive_denied` | `authorize_receive` said no for one delivery | `ci`, `client_id`, `topic` |
+| `retained_store_failed` | the store is full, or the message is too large to own | `topic` |
+| `retained_stale_purged` | an unstorable update evicted the value it replaces | `topic` |
+| `delivery_dropped` | a QoS>0 delivery was acknowledged and then not made | `client_id`, `topic`, `qos`, `err` |
+
+`err` on `delivery_dropped` distinguishes the two causes: `oversize` (the
+payload is larger than `max_payload_len`, so no owned copy is possible)
+and `capacity` (`max_pending_per_session` is full).
+
+## What this is for
+
+Three things, in rough order of how often they matter.
+
+**Operations.** Without a seam, the only questions answerable from
+outside the broker are "did it accept my credentials" and "did my message
+arrive". `delivery_dropped` in particular closes a real hole: a QoS 1
+publish is acknowledged to its publisher before the broker knows whether
+every subscriber can be given a copy, so a drop after that point is
+invisible to both ends. Now it is one event.
+
+**Security monitoring.** `connect_refused`, `publish_denied`,
+`subscribe_denied`, `receive_denied` and `session_taken_over` are the
+events an intrusion-detection rule would key on. They are also the ones a
+`Security` policy could partly observe on its own — the seam matters more
+for the ones it cannot see, like `protocol_violation` and
+`transport_send_failed`.
+
+**Compliance.** IEC 62443-4-2 CR 6.1 (audit log accessibility) and CR 6.2
+(continuous monitoring), and CR 2.8–2.12 (auditable events, storage
+capacity, response to audit processing failures, timestamps,
+non-repudiation), all require that security-relevant events be recorded.
+A component that does not surface them cannot have that requirement
+delegated to it, however good its access control is. minimosq does not
+implement an audit log — it has no clock, no storage and no I/O, by
+design — but it now emits the events one is built from. Timestamping is
+the integrator's, which is consistent with the rest of the library:
+`now_ms` is passed in, never read.
+
+## What it deliberately is not
+
+* **Not a log.** No formatting, no severity, no ring buffer, no
+  timestamps. Those need policy, storage and a clock; all three belong to
+  the integrator.
+* **Not metrics.** There are no counters. Counting is three lines in an
+  observer and would otherwise have to be paid for by everyone.
+* **Not complete.** Successful publishes and normal deliveries are not
+  reported: they are the hot path, and an event per message would change
+  the performance character of the broker. The events are the exceptions.

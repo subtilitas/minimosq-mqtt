@@ -119,13 +119,13 @@ TEST(retained_store_refuses_what_it_cannot_hold) {
         c = 'a';
     }
     long_topic[sizeof long_topic - 1] = '\0';
-    CHECK(!store.set(long_topic, wire::bs("v"), QoS::at_most_once));
+    CHECK(store.set(long_topic, wire::bs("v"), QoS::at_most_once) == RetainStatus::dropped);
 
     uint8_t big[SmallTraits::max_payload_len + 1];
     for (uint8_t& b : big) {
         b = 'x';
     }
-    CHECK(!store.set("fits", ByteSpan{big, sizeof big}, QoS::at_most_once));
+    CHECK(store.set("fits", ByteSpan{big, sizeof big}, QoS::at_most_once) == RetainStatus::dropped);
 
     CHECK_EQ(store.size(), 0u);  // neither was stored
 
@@ -134,14 +134,40 @@ TEST(retained_store_refuses_what_it_cannot_hold) {
     for (uint8_t& b : exact) {
         b = 'x';
     }
-    CHECK(store.set("fits", ByteSpan{exact, sizeof exact}, QoS::at_least_once));
+    CHECK(store.set("fits", ByteSpan{exact, sizeof exact}, QoS::at_least_once) ==
+          RetainStatus::stored);
     CHECK_EQ(store.size(), 1u);
+}
+
+TEST(retained_store_purges_a_value_it_can_no_longer_keep) {
+    // A retained topic is a last-known-value slot. An update too large to
+    // store must not leave the previous value behind: a subscriber
+    // joining later would be handed a stale reading with nothing marking
+    // it stale. Dropping the update is correct; serving the old one is
+    // not.
+    RetainedStore<SmallTraits> store;
+    CHECK(store.set("t", wire::bs("old"), QoS::at_most_once) == RetainStatus::stored);
+
+    uint8_t big[SmallTraits::max_payload_len + 1];
+    for (uint8_t& b : big) {
+        b = 'x';
+    }
+    CHECK(store.set("t", ByteSpan{big, sizeof big}, QoS::at_most_once) ==
+          RetainStatus::stale_purged);
+    CHECK_EQ(store.size(), 0u);
+
+    size_t seen = 0;
+    store.for_each_match("#", [&](RetainedStore<SmallTraits>::Entry&) { ++seen; });
+    CHECK_EQ(seen, 0u);
+
+    // Nothing to purge the second time round.
+    CHECK(store.set("t", ByteSpan{big, sizeof big}, QoS::at_most_once) == RetainStatus::dropped);
 }
 
 TEST(retained_store_replaces_rather_than_duplicating) {
     RetainedStore<SmallTraits> store;
-    CHECK(store.set("a/b", wire::bs("one"), QoS::at_most_once));
-    CHECK(store.set("a/b", wire::bs("two"), QoS::at_least_once));
+    CHECK(store.set("a/b", wire::bs("one"), QoS::at_most_once) == RetainStatus::stored);
+    CHECK(store.set("a/b", wire::bs("two"), QoS::at_least_once) == RetainStatus::stored);
     CHECK_EQ(store.size(), 1u);
 
     size_t seen = 0;
@@ -163,12 +189,12 @@ TEST(retained_store_full_refuses_new_topics_but_still_replaces) {
     for (size_t i = 0; i < SmallTraits::max_retained; ++i) {
         char topic[16];
         std::snprintf(topic, sizeof topic, "t/%zu", i);
-        CHECK(store.set(topic, wire::bs("v"), QoS::at_most_once));
+        CHECK(store.set(topic, wire::bs("v"), QoS::at_most_once) == RetainStatus::stored);
     }
     CHECK_EQ(store.size(), SmallTraits::max_retained);
 
-    CHECK(!store.set("t/new", wire::bs("v"), QoS::at_most_once));
+    CHECK(store.set("t/new", wire::bs("v"), QoS::at_most_once) == RetainStatus::dropped);
     // An existing topic still updates: replacement needs no free slot.
-    CHECK(store.set("t/0", wire::bs("updated"), QoS::at_most_once));
+    CHECK(store.set("t/0", wire::bs("updated"), QoS::at_most_once) == RetainStatus::stored);
     CHECK_EQ(store.size(), SmallTraits::max_retained);
 }

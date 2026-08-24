@@ -10,8 +10,16 @@ Security in minimosq is layered, and every layer is a policy you control:
    keeps a plaintext broker off the network entirely.
 2. **Authentication** — who is connecting.
 3. **Authorization** — what they may publish, subscribe to, and receive.
-4. **Resource protection** — bounded everything, so a hostile or broken
-   client cannot exhaust the broker.
+4. **Resource protection** — every table is fixed and every refusal is a
+   documented behaviour, so a hostile or broken client can be turned away
+   but cannot make the broker allocate, fragment or fail unpredictably.
+   Read that precisely: it bounds what a client can *cost*, and — with
+   the reclamation described below — how long it can *occupy*. It is not
+   a claim that no client is ever refused; a full table refuses, and that
+   is the design.
+5. **Observability** — every refusal, denial and drop is reported through
+   the [Observer](Observability) policy, because a resource control you
+   cannot see working is not one you can operate.
 
 ## The security policy
 
@@ -94,11 +102,18 @@ Behaviour worth knowing:
 
 * **Anonymous clients are refused** (`not_authorized`) unless you call
   `allow_anonymous(role)`.
-* **Unknown username and wrong password are indistinguishable** — both
-  answer `bad_credentials`. The lookup also scans the whole user table
-  and compares every stored password whether or not the name matched, so
-  the two cases take the same work and the answer is not a
-  user-enumeration oracle by timing either.
+* **Unknown username and wrong password answer the same thing** — both
+  `bad_credentials`. The lookup scans the whole user table and compares
+  every stored password whether or not the name matched, so neither the
+  response nor the number of password comparisons distinguishes them.
+  **The response, not the response time.** The *username* comparison
+  still short-circuits at the first differing byte, which is measurable
+  in the low tens of CPU cycles — enough, given enough samples on a
+  low-jitter path such as a unix socket or a co-resident attacker, to
+  recover a username byte by byte. It is not reachable across a plant
+  network. If your threat model includes a local attacker, compare
+  usernames with `constant_time_eq` as well, or key on a
+  transport-derived identity instead.
 * **Passwords are compared in constant time.** The comparison has no
   data-dependent early exit; a *length* difference is still observable,
   which for passwords is an accepted trade.
@@ -148,11 +163,16 @@ These are always on, and tuned through the traits:
 | `max_idle_ms` | Reclaims clients that connected with keep-alive 0; see below |
 | Transport output buffer | A client that will not drain its socket is dropped rather than stalling the broker |
 | Transport read budget | One connection is drained at most `max_reads_per_pass` times per poll, so a chatty peer cannot starve the others or stall `tick()` |
+| `max_topic_len` | A PUBLISH or will topic too long to store is refused outright, rather than reaching QoS 0 subscribers and silently skipping QoS>0 ones |
+| `session_expiry_ms` | Discards persistent sessions whose client never came back; see below |
+| Session eviction | A full session pool releases the longest-disconnected session rather than refuse a new client |
 | `max_sessions`, `max_retained`, `max_pending_per_session`, `max_inbound_qos2` | Fixed tables; a full table is refused cleanly (see the policy table in [Design notes](Design-Notes)) |
 
 Because nothing is allocated at runtime, there is no fragmentation and no
 out-of-memory path: the worst case is a refused connection or a dropped
-message, both of which are documented behaviours.
+message, both of which are documented behaviours — and both of which are
+reported to the [Observer](Observability), so "the broker is quietly
+dropping things" is something you can detect rather than infer.
 
 ### Idle clients and `max_idle_ms`
 
@@ -178,3 +198,36 @@ It defaults to 0 (disabled), which is the letter of the spec and the
 pre-existing behaviour. Anything reachable by untrusted clients should
 set it. The member is optional — traits that predate it still compile
 and behave as if it were 0.
+
+**It closes the keep-alive-0 case and only that case.** A client that
+asks for keep-alive 65535 rather than 0 is not idle by the broker's
+reckoning until 1.5 × 65535 s — over 27 hours — has passed, and
+`max_idle_ms` does not apply to it. If you need a hard ceiling on how
+long any client may hold a connection, reject or clamp implausible
+keep-alive values in your own `Security::authenticate`, or enforce it in
+the transport; the broker honours what the client asked for.
+
+### Sessions that outlive their clients
+
+Connections are not the only slot a client occupies. A `clean_session=0`
+session survives its connection, and MQTT 3.1.1 gives it no expiry — so
+without help, a client that connects, disconnects cleanly and repeats
+fills `max_sessions` with sessions nothing will reclaim, and no
+connection is left for keep-alive or `max_idle_ms` to act on.
+
+`Traits::session_expiry_ms` discards a session that has been disconnected
+that long. Like `max_idle_ms` it defaults to 0 and should be set on
+anything reachable by untrusted clients:
+
+```cpp
+struct MyTraits : minimosq::DefaultTraits {
+    static constexpr uint32_t session_expiry_ms = 3600000;  // 1 hour
+};
+```
+
+Independently of the timer, a full session pool evicts the
+longest-disconnected session rather than refuse a new client, so
+exhaustion degrades into "the oldest absent client loses its queued
+messages" rather than "the broker stops accepting anyone". A session with
+a live connection is never evicted. Both paths are reported
+(`session_expired`, `session_evicted`).
