@@ -71,6 +71,15 @@ public:
         }
     }
 
+    // Visit every retained message, matched or not. Used by SUBSCRIBE,
+    // which decides per message which of the session's freshly granted
+    // filters cover it — so it must see each stored message once, not
+    // once per filter.
+    template <typename F>
+    void for_each(F&& f) noexcept {
+        pool_.for_each(f);
+    }
+
     // Visit every retained message matching a topic filter.
     template <typename F>
     void for_each_match(StrView filter, F&& f) noexcept {

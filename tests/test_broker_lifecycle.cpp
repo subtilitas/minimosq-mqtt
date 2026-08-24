@@ -327,6 +327,96 @@ TEST(a_full_session_queue_reports_the_message_it_drops) {
 
 // ---------------------- retained replay: per message, not per filter
 
+TEST(overlapping_filters_replay_a_retained_message_once) {
+    // route_publish already delivers a live message once per session
+    // however many of its filters match. Retained replay must agree —
+    // and the per-filter form also made one SUBSCRIBE cost
+    // subscriptions x retained messages in output packets.
+    Bed x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    x.feed(0, wire::make_publish("a/x", wire::bs("v"), QoS::at_most_once, /*retain=*/true));
+
+    x.connect(1, "sub");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.feed(1, wire::make_subscribe(1, {{"a/x", 0}, {"a/#", 0}}));
+    const uint8_t codes[] = {0, 0};
+    expect_suback(x.t, 1, 1, codes);
+
+    expect_publish(x.t, 1, "a/x", wire::bs("v"), QoS::at_most_once, /*retain=*/true);
+    expect_silence(x.t, 1);
+}
+
+TEST(overlapping_filters_replay_at_the_highest_granted_qos) {
+    // Same rule route_publish uses: min(stored QoS, max granted across
+    // the session's matching filters).
+    Bed x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    x.feed(0,
+           wire::make_publish("a/x", wire::bs("v"), QoS::exactly_once, /*retain=*/true, false, 7));
+    expect_ack(x.t, 0, PacketType::pubrec, 7);
+
+    x.connect(1, "sub");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.feed(1, wire::make_subscribe(1, {{"a/x", 0}, {"a/#", 1}}));
+    const uint8_t codes[] = {0, 1};
+    expect_suback(x.t, 1, 1, codes);
+
+    expect_publish(x.t, 1, "a/x", wire::bs("v"), QoS::at_least_once, /*retain=*/true);
+    expect_silence(x.t, 1);
+}
+
+TEST(retained_replay_is_bounded_by_the_store_not_the_subscription_count) {
+    // The amplification check: K filters over R retained messages used to
+    // produce K*R packets. It must be at most R.
+    Bed x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    for (size_t i = 0; i < SmallTraits::max_retained; ++i) {
+        char topic[8] = {'a', '/', static_cast<char>('0' + i), '\0'};
+        x.feed(0, wire::make_publish(topic, wire::bs("v"), QoS::at_most_once, /*retain=*/true));
+    }
+
+    x.connect(1, "sub");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.feed(1, wire::make_subscribe(1, {{"a/#", 0}, {"a/+", 0}, {"#", 0}}));
+    const uint8_t codes[] = {0, 0, 0};
+    expect_suback(x.t, 1, 1, codes);
+
+    size_t delivered = 0;
+    while (!x.t.no_more(1)) {
+        CapturedPacket p = x.t.next(1);
+        CHECK(p.ok);
+        if (!p.ok) {
+            break;
+        }
+        CHECK(packet_type(p.first_byte) == PacketType::publish);
+        ++delivered;
+    }
+    CHECK_EQ(delivered, SmallTraits::max_retained);
+}
+
+TEST(retained_replay_skips_messages_no_granted_filter_matches) {
+    // Inverting pass 3 to iterate the store means every retained message
+    // is now considered for every SUBSCRIBE; the ones nothing granted
+    // matches must be skipped, not delivered.
+    Bed x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    x.feed(0, wire::make_publish("a/x", wire::bs("in"), QoS::at_most_once, /*retain=*/true));
+    x.feed(0, wire::make_publish("b/y", wire::bs("out"), QoS::at_most_once, /*retain=*/true));
+
+    x.connect(1, "sub");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.feed(1, wire::make_subscribe(1, {{"a/#", 0}}));
+    const uint8_t codes[] = {0};
+    expect_suback(x.t, 1, 1, codes);
+
+    expect_publish(x.t, 1, "a/x", wire::bs("in"), QoS::at_most_once, /*retain=*/true);
+    expect_silence(x.t, 1);
+}
+
 TEST(an_overfull_inbound_qos2_window_reports_a_capacity_violation) {
     // Dropping the client is the documented policy — duplicate delivery
     // is never risked — but it used to be indistinguishable from a

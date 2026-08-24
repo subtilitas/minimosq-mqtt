@@ -1094,29 +1094,57 @@ private:
         // Driven off the session's own table rather than the packet, so
         // a subscription that merely already existed — and was refused
         // this time round — replays nothing.
-        for (typename SessionT::Subscription& sub : s.subs) {
-            if (!sub.retain_pending) {
-                continue;
-            }
-            sub.retain_pending = false;
-            retained_.for_each_match(
-                sub.filter.view(), [&](typename RetainedStore<Traits>::Entry& e) {
-                    if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
-                        notify_denied(EventKind::receive_denied, s, e.topic.view());
-                        return;
+        //
+        // The loop is per retained message, not per granted filter, for
+        // two reasons. It matches route_publish: a session that holds
+        // both "a/x" and "a/#" receives a live publish to a/x once, and
+        // should not receive the retained one twice. And it bounds the
+        // work: the per-filter form sent one packet per (filter, message)
+        // pair, so a single SUBSCRIBE granting K filters over R retained
+        // messages produced K*R sends — at the default traits, ~1000
+        // output bytes per input byte, enough for one socket read to
+        // monopolise a poll pass and starve tick(). This form sends at
+        // most R, whatever K is.
+        if (any_retain_pending(s)) {
+            retained_.for_each([&](typename RetainedStore<Traits>::Entry& e) {
+                bool matched = false;
+                QoS granted_max = QoS::at_most_once;
+                for (const typename SessionT::Subscription& sub : s.subs) {
+                    if (sub.retain_pending && topic_matches(sub.filter.view(), e.topic.view())) {
+                        matched = true;
+                        granted_max = qos_max(granted_max, sub.granted);
                     }
-                    // Retained delivery at min(granted, stored QoS), with
-                    // the retain flag set [MQTT-3.3.1-8].
-                    const QoS eff = qos_min(sub.granted, e.qos);
-                    if (eff == QoS::at_most_once) {
-                        send_to(ci, build_publish(out_, sizeof out_, e.topic.view(),
-                                                  e.payload.view(), QoS::at_most_once,
-                                                  /*retain=*/true, false, 0));
-                    } else {
-                        enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
-                    }
-                });
+                }
+                if (!matched) {
+                    return;
+                }
+                if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
+                    notify_denied(EventKind::receive_denied, s, e.topic.view());
+                    return;
+                }
+                // Retained delivery at min(granted, stored QoS), with the
+                // retain flag set [MQTT-3.3.1-8].
+                const QoS eff = qos_min(granted_max, e.qos);
+                if (eff == QoS::at_most_once) {
+                    send_to(ci, build_publish(out_, sizeof out_, e.topic.view(), e.payload.view(),
+                                              QoS::at_most_once, /*retain=*/true, false, 0));
+                } else {
+                    enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
+                }
+            });
         }
+        for (typename SessionT::Subscription& sub : s.subs) {
+            sub.retain_pending = false;
+        }
+    }
+
+    static bool any_retain_pending(const SessionT& s) noexcept {
+        for (const typename SessionT::Subscription& sub : s.subs) {
+            if (sub.retain_pending) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Apply a single (syntactically valid) subscription request;
