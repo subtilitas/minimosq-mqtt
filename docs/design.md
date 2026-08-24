@@ -22,6 +22,7 @@ core/       spans, error codes, fixed-capacity containers
 protocol/   MQTT 3.1.1 wire: reader/writer, frame parser, packets
 topic.hpp   topic validation + wildcard matching
 broker/     sessions, retained store, the Broker state machine
+            (+ observer.hpp: the event seam)
 transport.hpp             the transport contract (documentation + NullTransport)
 transports/posix/         TCP, unix socket, pipe reference transports
 transports/tls_adapter.hpp  the TLS seam (interface only, see docs/tls.md)
@@ -125,14 +126,59 @@ Full details, the `TableAcl` component, and the threat model are in
 | Client connects with keep-alive 0 | never timed out, unless `max_idle_ms` is set (see [Security](Security)) |
 | Empty client id, clean session | server assigns a unique `mmq-<n>` id |
 | Empty client id, persistent session | CONNACK 0x02, connection closed |
-| Retained store full / message too big to store | best effort: not stored, still forwarded live |
-| Offline queue full | newest message for that session is dropped |
-| Payload larger than `max_payload_len` | delivered QoS 0 pass-through only; QoS>0 subscribers skipped (size `max_payload_len >= max_packet_size` to avoid) |
+| Retained store full | best effort: not stored, still forwarded live |
+| Retained message too big to store, topic already retained | the previous value is **purged**, not left to be served as current; still forwarded live |
+| Offline queue full | newest message for that session is dropped, and `delivery_dropped` reported |
+| Topic name longer than `max_topic_len` (PUBLISH or will) | refused: connection closed (PUBLISH) / CONNACK 0x03 (will). It could not be retained or queued, so half-delivering it is worse than refusing |
+| Payload larger than `max_payload_len` | delivered QoS 0 pass-through only; QoS>0 subscribers skipped and `delivery_dropped` reported (size `max_payload_len >= max_packet_size` to avoid) |
 | Inbound QoS 2 id table full | connection dropped (duplicate delivery is never risked) |
 | Will topic/payload beyond capacity limits | CONNACK 0x03, connection closed |
-| Session slots exhausted | CONNACK 0x03, connection closed |
+| Session slots exhausted, some session disconnected | the longest-disconnected session is evicted for the new client |
+| Session slots exhausted, every session connected | CONNACK 0x03, connection closed |
+| Persistent session disconnected for `session_expiry_ms` | discarded (0 = never, the letter of the spec) |
 | Unknown PUBACK/PUBREC/PUBCOMP ids | ignored |
 | QoS 0 messages for offline persistent sessions | dropped (spec-sanctioned) |
+
+## Session lifetime
+
+MQTT 3.1.1 has no session expiry. A `clean_session=0` session is meant to
+live until its client returns, and taken literally that is a liveness
+bug: a client can connect, disconnect cleanly, and repeat until
+`max_sessions` slots hold sessions nothing will ever come back for —
+with no connection left for any timeout to reclaim. Every later client
+then gets CONNACK 0x03.
+
+Two mechanisms bound it, and they are deliberately different in kind:
+
+- **`Traits::session_expiry_ms`** discards a session that has been
+  disconnected that long. It is the policy, it is off by default (0), and
+  it is what stops dead sessions accumulating.
+- **Eviction** is the guarantee. When the pool is full and a new client
+  authenticates, the longest-disconnected session is released to make
+  room. A session with a live connection is never a victim, so this can
+  only break a promise to a client that is not currently here. Ordering
+  is by a monotonic ticket stamped at disconnect, not by the clock, so
+  "gone longest" stays a total order however long a session has been
+  idle.
+
+Eviction is always on and needs no configuration, because "the broker
+refuses everyone" is never the better answer to a full table. The timer
+exists so eviction stays the exception.
+
+## Observability
+
+The broker reports what it decides through an `Observer` policy — the
+fourth template parameter, defaulting to a `NullObserver` that compiles
+away. Connection and session lifecycle, protocol violations,
+authorization denials, capacity refusals and dropped deliveries all
+surface as a single tagged `Event`. See
+[observability.md](observability.md) for the contract and the event
+table.
+
+The seam exists because the alternative is that the interesting cases are
+invisible: a QoS 1 publish is acknowledged to its publisher before the
+broker knows whether every subscriber can be given a copy, so a drop
+after that point could not be seen from either end.
 
 ## Out of scope (deliberately)
 
@@ -140,3 +186,5 @@ Full details, the `TableAcl` component, and the threat model are in
 - `$SYS` broker status topics
 - Bridging, clustering, persistence across reboots
 - A bundled TLS implementation (see `docs/tls.md` for the seam)
+- Logging, metrics and audit storage (see `docs/observability.md` for the
+  event seam they are built from)

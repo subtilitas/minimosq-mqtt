@@ -444,3 +444,122 @@ Two additions remain worth considering, neither of which was a finding:
   written matcher now exists (it is what validated `topic_matches` over
   a million pairs). Checking it in as a permanent test would keep the
   security-critical matcher honest through future refactors.
+
+
+---
+
+# Second pass
+
+A follow-up audit of the same tree at `2a9e340` (v0.3.5), re-verifying the
+first review's fixes and looking specifically at what the broker does
+when it runs out of room.
+
+**Verdict.** The parts the first review vouched for held up under
+re-verification: no memory-safety defect across ~1.5M fuzzed packets,
+`topic_matches` clean over 11.4M differential pairs,
+`topic_filter_covers` sound over 3.8M cover pairs, the UTF-8 validator
+exact over 151.6M exhaustive cases, and every fix claimed above genuinely
+present in the code. What this pass found is elsewhere: four capacity
+behaviours that were silently wrong or unbounded, and the fact that none
+of them — nor anything else the broker decides — was visible from
+outside.
+
+Two corrections to the record above, for honesty:
+
+- **L1's fix is dead code.** `frame_packet`'s `if (!w.ok())` can never
+  fire: the writer is given a capacity of exactly what it writes. What
+  actually closed the repro was the `body_len > max_remaining_length`
+  check, which the entry does not mention. The same is true of the guards
+  added to `build_connack` and `build_packet_id_only`; only
+  `build_publish`'s is live. The underlying hole is real but not
+  reachable in-tree — `frame_packet` takes a raw pointer with no capacity
+  argument, so it cannot validate the span it returns.
+- The README claimed 177 test cases against a tree containing 193.
+
+## Fixed in this round
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| H1 | Disconnected persistent sessions were never reclaimed. MQTT 3.1.1 has no session expiry, so one connection could create `max_sessions` persistent sessions, disconnect each cleanly, and lock the broker shut with **zero connections live** — nothing left for keep-alive or `max_idle_ms` to act on, and `TableAcl` ignores `client_id`, so one valid credential sufficed. `security.md`'s "cannot exhaust the broker" was false as written. | Optional `Traits::session_expiry_ms` (0 = disabled, detected like `max_idle_ms`) discards sessions disconnected that long; independently, a full pool evicts the longest-disconnected session rather than refuse a new client. Ordering is a monotonic ticket stamped at disconnect, not the clock, so "gone longest" survives wrap. A connected session is never a victim. |
+| H2 | An oversized retained PUBLISH left the **previous** value in the store. Live subscribers got the new value, the publisher was acknowledged, and every later subscriber was handed a stale reading that looked current — the opposite of what a last-known-value slot is for. | `RetainedStore::set` now evicts what it cannot replace, and reports which of three things happened (`stored` / `dropped` / `stale_purged`) instead of a bool. |
+| H3 | A PUBLISH whose topic exceeded `max_topic_len` reached routing and silently skipped every QoS>0 subscriber while the publisher was acknowledged — so asking for a *higher* QoS made delivery *less* reliable. `design.md`'s mitigation advice ("size `max_payload_len >= max_packet_size`") was incomplete: `max_topic_len` gated the same branch. | Topics too long to own are refused at entry — connection closed for a client PUBLISH, `Err::oversize` from `Broker::publish()`, CONNACK 0x03 for a will (already the case). `enqueue`'s topic check is gone; the payload case remains, deliberately, because QoS 0 pass-through is bounded by `max_packet_size` — but it is now reported. |
+| H4 | SUBSCRIBE replayed retained messages **per matching filter**, so K granted filters over R retained messages produced K×R packets. Measured at `DefaultTraits`: one 68-byte SUBSCRIBE → 129 sends, 67 KB out; one 2040-byte read (exactly one read of the reference transport) → 3870 sends, 2.02 MB, 818 µs. `conn_data()` was therefore bounded by the segment the transport handed it rather than by the traits — roughly 400 ns per input byte, enough to starve `tick()`. | Pass 3 iterates the store once and takes the max granted QoS across the filters this packet granted, exactly as `route_publish` does for live traffic. At most R sends whatever K is; this also fixes overlapping filters delivering a retained message twice. |
+| — | Nothing the broker decided was observable. The `Security` hooks could see authentication and authorization; connection teardown, protocol violations, oversize packets, capacity refusals, keep-alive timeouts, session takeover, will firing and transport failures were invisible. That makes every finding above the kind that can only be found by reading the code — a broker silently dropping messages looks exactly like one with nothing to do. | New `Observer` policy — the fourth `Broker` template parameter, defaulting to a `NullObserver` that compiles away. One `on_event(const Event&)` with a tagged struct, so a new `EventKind` never breaks an existing observer. 19 kinds covering connection and session lifecycle, denials, capacity and drops. See [observability.md](observability.md). |
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| GCC 13 and Clang 18, 32-bit, `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -fno-exceptions -fno-rtti` | 18/18 binaries, **215 cases**, zero warnings |
+| ASan + UBSan, `-fno-sanitize-recover=all` | 215/215 pass, zero trips |
+| clang-format 18.1.3 / clang-tidy 18.1.1 gates | clean, 0 findings |
+| End-to-end against stock `mosquitto_pub`/`mosquitto_sub` | pass |
+| Coverage (`tools/coverage.py`, GCC 13, Codecov-comparable) | **89.4%** fully covered (was 87.4%), 95.6% executed, 85.0% branch — floors are 85/80 |
+| `sizeof(Broker<DefaultTraits, …>)` | 78,152 → **78,288 B** (+136: 8 bytes per session for the disconnect bookkeeping, plus alignment) |
+
+Each fix has a regression test in `tests/test_broker_lifecycle.cpp`
+(21 cases), including the amplification bound, the eviction victim being
+the *oldest* rather than an arbitrary session, and the stale purge being
+observable from a later subscriber rather than only from
+`retained_count()`.
+
+## Not addressed here — known, ranked
+
+Confirmed and deliberately left. These are the next round, not
+oversights.
+
+1. **No TLS engine, and `NullTlsEngine` can ship as one with no signal.**
+   Wired exactly as `tls.md` documents, a raw MQTT CONNECT (no
+   ClientHello) is accepted and the password crosses in cleartext, with
+   no `static_assert`, `#warning` or opt-in macro anywhere in
+   `transports/`. Gate it. Further: `on_ciphertext()` is called once per
+   `conn_data` with no drain loop (measured: 3840 of 4096 bytes stranded
+   at `BufSize=256`, still stranded after two `tick()`s), `close()` never
+   calls `reset()` so session keys outlive the connection and no
+   `close_notify` is ever sent, and `BufSize` must exceed the plaintext
+   by the record overhead or `encrypt()` fails — which the broker treats
+   as an abnormal disconnect, firing the will.
+2. **Keep-alive is refreshed by bytes, not Control Packets.** One body
+   byte per window holds a connection open indefinitely (measured: 580 s,
+   never closed). [MQTT-3.1.2-24] speaks of a Control Packet, and there
+   is no incomplete-packet timeout after CONNECT.
+3. **`max_idle_ms` applies only to keep-alive 0.** Asking for 65535
+   instead buys 27 h 18 m per CONNECT regardless of the setting.
+   Documented now; not fixed.
+4. **An unacknowledged in-flight message wedges a session's queue
+   permanently.** No in-flight timeout and no retransmission while
+   connected (correct per [MQTT-4.4.0-1], but consequential): a
+   subscriber that never PUBACKs fills `max_pending_per_session`, and
+   every later QoS>0 message for it is dropped — measured still wedged
+   after 22 simulated hours, connection alive. Now at least reported
+   (`delivery_dropped`), but nothing recovers the session.
+5. **`max_inbound_qos2 = 8` disconnects conformant clients and fires
+   their will.** Paho defaults to 10 in-flight, `mosquitto_pub` to 20.
+   For a persistent session the id table survives the reconnect, so every
+   reconnect is dropped again on the first new id.
+6. **`TableAcl` has no rotation or revocation** — no `remove_user`, no
+   `set_password`, and duplicates are rejected, so a credential is
+   immutable for the process lifetime. It also accepts an empty password,
+   after which the client may omit the password field entirely.
+7. **The username comparison is a prefix oracle** — roughly 1.08 cycles
+   per matching byte, measured over 2M interleaved samples. The password
+   comparison is genuinely constant-time; `security.md` now claims only
+   that.
+8. **`PipeTransport::flush()` uses `write(2)` with no SIGPIPE
+   handling** — measured: the process is killed. The examples set
+   `SIG_IGN`; the header never says it is required. The same hazard
+   returns for `StreamServerTransport` on any stack without
+   `MSG_NOSIGNAL`.
+9. **No zeroization anywhere.** Passwords and decrypted TLS plaintext sit
+   in `.bss` for the process lifetime.
+10. **`frame_packet` cannot validate the span it returns** (see the L1
+    correction above): give it a capacity argument.
+
+Non-code, cheap, and disproportionately visible to anyone evaluating the
+project: a `SECURITY.md` with a disclosure policy and a contact, an SBOM
+emitted from `release.yml`, signed releases, a reproducible tarball, a
+version macro in a header (the version lives only in `CMakeLists.txt`, so
+a vendored copy is unidentifiable), `install()` rules and a package
+config — `find_package(minimosq)` cannot work today despite
+`release.yml` asserting it does — and the in-tree libFuzzer target and
+differential topic matcher this document already recommended.

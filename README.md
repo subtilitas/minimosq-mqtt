@@ -21,6 +21,10 @@ for embedded use:
   (static polymorphism, no virtuals). Reference transports: TCP, unix
   domain sockets, and plain pipes; a documented TLS seam
   ([docs/tls.md](docs/tls.md)) shows where mbedTLS/wolfSSL plug in.
+- **Nothing is silent** — every refusal, authorization denial, protocol
+  violation and dropped delivery is reported through an observer policy
+  ([docs/observability.md](docs/observability.md)). The default records
+  nothing and compiles away.
 - **QoS 0, 1 and 2** — full receiver and sender state machines,
   retained messages, wills, keep-alive, persistent sessions with
   offline queueing and DUP retransmission on resume.
@@ -68,6 +72,8 @@ struct MyTraits {
     static constexpr size_t max_pending_per_session = 4;
     static constexpr size_t max_inbound_qos2 = 4;
     static constexpr uint32_t connect_timeout_ms = 10000;
+    static constexpr uint32_t max_idle_ms = 300000;      // keep-alive-0 clients
+    static constexpr uint32_t session_expiry_ms = 3600000;  // absent clients
 };
 ```
 
@@ -108,6 +114,31 @@ to roles and roles to readable/writable topic patterns; see
 [examples/tcp_broker_acl.cpp](examples/tcp_broker_acl.cpp) and the
 security section of [docs/design.md](docs/design.md).
 
+## Observability
+
+The fourth template parameter is an observer. The broker decides plenty
+worth recording — why a connection went away, which packet was a
+protocol violation, which retained message could not be stored, which
+QoS 1 delivery was acknowledged to its publisher and then dropped — and
+this is where it comes out:
+
+```cpp
+struct MyObserver {
+    void on_event(const minimosq::Event& e) noexcept {
+        log(minimosq::event_kind_name(e.kind), e.client_id, e.topic);
+    }
+};
+minimosq::Broker<Traits, Transport, Security, MyObserver> broker{transport};
+```
+
+One method, one tagged `Event`, no allocation; adding an event kind never
+breaks an existing observer. The default (`NullObserver`) has an empty
+body and optimizes away entirely, so the seam is free if you do not want
+it. There is no logger, no metrics and no audit storage in the library —
+those need a clock, storage and policy, all of which are yours. See
+[docs/observability.md](docs/observability.md) for the contract, the full
+event table, and the IEC 62443 CR 6.x mapping.
+
 ## Custom transports
 
 A transport is any type with `bool send(size_t, ByteSpan)` and
@@ -139,7 +170,7 @@ mosquitto_pub -p 1883 -q 2 -t demo/hello -m 'hi' -r
 
 ## Testing and coverage
 
-177 test cases across the protocol, broker, ACL and transport layers,
+215 test cases across the protocol, broker, ACL and transport layers,
 run on every push under GCC and Clang, 32-bit and MSVC, plus
 AddressSanitizer + UndefinedBehaviorSanitizer and an end-to-end smoke
 test against stock `mosquitto` clients. The whole repository builds
