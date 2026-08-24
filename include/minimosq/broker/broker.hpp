@@ -245,6 +245,12 @@ public:
         if (!topic_name_valid(topic)) {
             return Err::malformed;
         }
+        // Same rule the client path enforces: a topic too long to own
+        // could not be retained or queued, so it is refused rather than
+        // delivered to some subscribers and not others.
+        if (topic.len > Traits::max_topic_len) {
+            return Err::oversize;
+        }
         // 2-byte topic length prefix, the topic, the packet identifier
         // that QoS > 0 adds, and the payload.
         const size_t id_len = (qos == QoS::at_most_once) ? 0u : 2u;
@@ -610,9 +616,15 @@ private:
     // Append a QoS 1/2 delivery to a session's queue and, if the client
     // is online, put it on the wire.
     void enqueue(SessionT& s, StrView topic, ByteSpan payload, QoS eff, bool retain) {
-        if (topic.len > Traits::max_topic_len || payload.len > Traits::max_payload_len) {
+        // Topic length is no longer a case here: a PUBLISH or will whose
+        // topic exceeds max_topic_len is refused at the point it enters
+        // the broker, so every topic that reaches routing fits in owned
+        // storage. Payload still can be larger, because QoS 0 delivery is
+        // bounded by max_packet_size rather than max_payload_len and
+        // passing those straight through is deliberate.
+        if (payload.len > Traits::max_payload_len) {
             // Documented policy: too large for owned storage — this
-            // subscriber is skipped. Size max_payload_len >=
+            // subscriber is skipped. Set max_payload_len >=
             // max_packet_size to rule this out entirely.
             notify_drop(s, topic, eff, Err::oversize);
             return;
@@ -897,6 +909,19 @@ private:
         if (parse_publish(first_byte, body, p) != Err::ok || !topic_name_valid(p.topic)) {
             notify_violation(ci, Err::malformed);
             c.dead = true;  // [MQTT-3.3.2-2]
+            return;
+        }
+        // A topic the broker cannot own is refused outright rather than
+        // half-delivered. It could still be forwarded to QoS 0
+        // subscribers, but it could not be retained, queued for an
+        // offline session, or delivered to anyone holding a QoS>0
+        // subscription — and the publisher would be acknowledged
+        // regardless. Silently honouring a QoS 1 PUBLISH for some
+        // subscribers and not others is the worse answer; 3.1.1 has no
+        // way to say "too long", so the connection closes.
+        if (p.topic.len > Traits::max_topic_len) {
+            notify_violation(ci, Err::oversize);
+            c.dead = true;
             return;
         }
 

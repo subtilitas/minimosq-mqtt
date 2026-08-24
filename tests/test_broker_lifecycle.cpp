@@ -221,6 +221,46 @@ TEST(a_full_retained_store_purges_nothing_it_did_not_own) {
 
 // ------------------------------ capacity limits enforced at the door
 
+TEST(a_publish_topic_beyond_capacity_is_refused_not_half_delivered) {
+    // It would reach QoS 0 subscribers and silently skip QoS>0 ones,
+    // while the publisher is acknowledged either way. Requesting a
+    // higher QoS must not make delivery less reliable.
+    BedT<AllowAllSecurity, Recorder> x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    char topic[SmallTraits::max_topic_len + 2];
+    for (char& c : topic) {
+        c = 'a';
+    }
+    topic[sizeof topic - 1] = '\0';
+    x.feed(0, wire::make_publish(topic, wire::bs("v"), QoS::at_most_once));
+
+    CHECK(x.t.logs[0].closed);
+    const Recorder::Row* v = x.b.observer().first(EventKind::protocol_violation);
+    CHECK(v != nullptr);
+    if (v != nullptr) {
+        CHECK(v->err == Err::oversize);
+    }
+}
+
+TEST(the_application_publish_api_applies_the_same_rule) {
+    Bed x;
+    char topic[SmallTraits::max_topic_len + 2];
+    for (char& c : topic) {
+        c = 'a';
+    }
+    topic[sizeof topic - 1] = '\0';
+    CHECK(x.b.publish(topic, wire::bs("v"), QoS::at_most_once, false) == Err::oversize);
+
+    char fits[SmallTraits::max_topic_len + 1];
+    for (char& c : fits) {
+        c = 'a';
+    }
+    fits[sizeof fits - 1] = '\0';
+    CHECK(x.b.publish(fits, wire::bs("v"), QoS::at_most_once, false) == Err::ok);
+}
+
 TEST(an_oversize_payload_still_passes_through_at_qos0_and_is_reported_at_qos1) {
     // Payload is deliberately different from topic: QoS 0 pass-through is
     // bounded by max_packet_size, so a payload too large to *own* is
