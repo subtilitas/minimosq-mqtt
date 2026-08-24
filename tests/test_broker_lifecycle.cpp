@@ -173,6 +173,52 @@ TEST(session_expiry_leaves_connected_sessions_alone) {
 
 // ------------------------------------------ retained values gone stale
 
+TEST(an_unstorable_retained_update_purges_the_value_it_replaces) {
+    // The publisher is acknowledged and live subscribers see the new
+    // value, so leaving the old one in the store would hand every later
+    // subscriber a stale reading that looks current.
+    BedT<AllowAllSecurity, Recorder> x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    x.feed(0, wire::make_publish("t", wire::bs("old"), QoS::at_most_once, /*retain=*/true));
+    CHECK_EQ(x.b.retained_count(), 1u);
+
+    uint8_t big[SmallTraits::max_payload_len + 1];
+    for (uint8_t& b : big) {
+        b = 'x';
+    }
+    x.feed(0, wire::make_publish("t", ByteSpan{big, sizeof big}, QoS::at_most_once,
+                                 /*retain=*/true));
+    CHECK_EQ(x.b.retained_count(), 0u);
+    CHECK(x.b.observer().saw(EventKind::retained_stale_purged));
+    CHECK(x.b.observer().saw(EventKind::retained_store_failed));
+
+    // A subscriber joining now is told nothing rather than told 'old'.
+    x.connect(1, "sub");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.feed(1, wire::make_subscribe(1, {{"t", 0}}));
+    const uint8_t codes[] = {0};
+    expect_suback(x.t, 1, 1, codes);
+    expect_silence(x.t, 1);
+}
+
+TEST(a_full_retained_store_purges_nothing_it_did_not_own) {
+    BedT<AllowAllSecurity, Recorder> x;
+    x.connect(0, "pub");
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    for (size_t i = 0; i < SmallTraits::max_retained; ++i) {
+        char topic[8] = {'t', static_cast<char>('0' + i), '\0'};
+        x.feed(0, wire::make_publish(topic, wire::bs("v"), QoS::at_most_once, /*retain=*/true));
+    }
+    CHECK_EQ(x.b.retained_count(), SmallTraits::max_retained);
+
+    x.feed(0, wire::make_publish("new", wire::bs("v"), QoS::at_most_once, /*retain=*/true));
+    CHECK_EQ(x.b.retained_count(), SmallTraits::max_retained);  // nothing displaced
+    CHECK(x.b.observer().saw(EventKind::retained_store_failed));
+    CHECK(!x.b.observer().saw(EventKind::retained_stale_purged));
+}
+
 // ------------------------------ capacity limits enforced at the door
 
 TEST(an_oversize_payload_still_passes_through_at_qos0_and_is_reported_at_qos1) {

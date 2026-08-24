@@ -552,12 +552,23 @@ private:
     // ------------------------------------------------------ publishing
 
     // Store/remove a retained message; best-effort, see RetainedStore.
+    // Returns false when the new value was not stored — in which case
+    // any previous value for the topic has been purged rather than left
+    // behind to be served as if it were current.
     bool apply_retain(StrView topic, ByteSpan payload, QoS qos) {
         if (payload.empty()) {
             retained_.remove(topic);  // [MQTT-3.3.1-10]
             return true;
         }
-        return retained_.set(topic, payload, qos);
+        const RetainStatus st = retained_.set(topic, payload, qos);
+        if (st == RetainStatus::stale_purged) {
+            notify_topic(EventKind::retained_stale_purged, topic);
+        }
+        if (st != RetainStatus::stored) {
+            notify_topic(EventKind::retained_store_failed, topic);
+            return false;
+        }
+        return true;
     }
 
     // Deliver a message to every matching subscriber. Each session gets
