@@ -34,6 +34,7 @@ CURATED = [
     ("docs/security.md", "Security", "Security and ACLs"),
     ("docs/transports.md", "Transports", "Transports"),
     ("docs/tls.md", "TLS", "TLS integration"),
+    ("docs/observability.md", "Observability", "Observability"),
     ("docs/porting.md", "Porting", "Porting guide"),
     ("docs/design.md", "Design-Notes", "Design notes"),
 ]
@@ -46,6 +47,7 @@ SIDEBAR = [
     ("Security", "Security & ACLs"),
     ("Transports", "Transports"),
     ("TLS", "TLS"),
+    ("Observability", "Observability"),
     ("Porting", "Porting"),
     ("API-Reference", "API reference"),
     ("Design-Notes", "Design notes"),

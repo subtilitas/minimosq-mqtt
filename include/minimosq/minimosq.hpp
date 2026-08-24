@@ -9,6 +9,7 @@
 
 #include "broker/broker.hpp"
 #include "broker/config.hpp"
+#include "broker/observer.hpp"
 #include "transport.hpp"
 
 #endif  // MINIMOSQ_MINIMOSQ_HPP

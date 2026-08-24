@@ -91,12 +91,15 @@ struct CaptureTransport {
     bool no_more(size_t ci) const { return logs[ci].rpos == logs[ci].len; }
 };
 
-// A broker wired to a capture transport, plus driving helpers.
-template <typename Security = AllowAllSecurity>
+// A broker wired to a capture transport, plus driving helpers. Traits
+// comes last so BedT<MySecurity> keeps working; pass all three when a
+// test needs its own capacities or an observer.
+template <typename Security = AllowAllSecurity, typename Observer = NullObserver,
+          typename Traits = SmallTraits>
 struct BedT {
-    using Transport = CaptureTransport<SmallTraits::max_connections>;
+    using Transport = CaptureTransport<Traits::max_connections>;
     Transport t;
-    Broker<SmallTraits, Transport, Security> b{t};
+    Broker<Traits, Transport, Security, Observer> b{t};
     uint32_t now = 1000;
 
     void open(size_t c) { CHECK(b.conn_open(c, now) == Err::ok); }
