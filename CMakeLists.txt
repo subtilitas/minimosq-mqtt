@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(minimosq VERSION 0.3.5 LANGUAGES CXX)
+project(minimosq VERSION 0.4.0 LANGUAGES CXX)
 
 # minimosq is a header-only library. Consumers only need the include path
 # and a C++17 compiler; nothing is compiled for the library itself.
