@@ -13,6 +13,11 @@ namespace {
 
 // ---------------------------------------------------------- fixtures
 
+// SmallTraits with sessions that expire, so the timer path is testable.
+struct ExpiringTraits : SmallTraits {
+    static constexpr uint32_t session_expiry_ms = 60000;
+};
+
 // Records every event the broker reports, in order.
 struct Recorder {
     struct Row {
@@ -79,9 +84,92 @@ bool str_eq(const char* a, const char* b) {
     return *a == *b;
 }
 
+// Connect, then disconnect cleanly, leaving a persistent session behind.
+template <typename B>
+void leave_persistent_session(B& x, size_t ci, const char* id) {
+    wire::ConnectOpts o;
+    o.clean = false;
+    x.connect(ci, id, o);
+    expect_connack(x.t, ci, false, ConnackCode::accepted);
+    x.feed(ci, wire::make_disconnect());
+}
+
 }  // namespace
 
 // ----------------------------------------------- session reclamation
+
+TEST(abandoned_persistent_sessions_do_not_lock_the_broker_shut) {
+    // MQTT 3.1.1 has no session expiry, so before eviction existed one
+    // connection could fill every session slot and walk away, leaving
+    // nothing to reclaim and every later client refused.
+    BedT<> x;
+    for (size_t i = 0; i < SmallTraits::max_sessions; ++i) {
+        char id[8] = {'p', static_cast<char>('0' + i), '\0'};
+        leave_persistent_session(x, 0, id);
+    }
+
+    // Zero connections are live and the pool is full. A new client still
+    // gets in: the longest-disconnected session is evicted for it.
+    x.connect(1, "fresh");
+    expect_connack(x.t, 1, false, ConnackCode::accepted);
+
+    // And the one evicted is the oldest, not an arbitrary victim: p1 and
+    // p2 are still resumable, p0 is gone.
+    wire::ConnectOpts o;
+    o.clean = false;
+    x.connect(2, "p1", o);
+    expect_connack(x.t, 2, /*session_present=*/true, ConnackCode::accepted);
+}
+
+TEST(eviction_reports_which_session_was_broken) {
+    BedT<AllowAllSecurity, Recorder> x;
+    for (size_t i = 0; i < SmallTraits::max_sessions; ++i) {
+        char id[8] = {'p', static_cast<char>('0' + i), '\0'};
+        leave_persistent_session(x, 0, id);
+    }
+    x.connect(1, "fresh");
+
+    const Recorder::Row* ev = x.b.observer().first(EventKind::session_evicted);
+    CHECK(ev != nullptr);
+    if (ev != nullptr) {
+        CHECK(str_eq(ev->client_id, "p0"));
+    }
+}
+
+TEST(session_expiry_reclaims_before_the_pool_fills) {
+    BedT<AllowAllSecurity, Recorder, ExpiringTraits> x;
+    leave_persistent_session(x, 0, "gone");
+    CHECK(x.b.observer().times(EventKind::session_expired) == 0u);
+
+    // Just short of the timer: still resumable.
+    x.now += ExpiringTraits::session_expiry_ms - 1;
+    x.b.tick(x.now);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 0u);
+
+    x.now += 1;
+    x.b.tick(x.now);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 1u);
+
+    // Reconnecting now is a fresh session, not a resumed one.
+    wire::ConnectOpts o;
+    o.clean = false;
+    x.connect(1, "gone", o);
+    expect_connack(x.t, 1, /*session_present=*/false, ConnackCode::accepted);
+}
+
+TEST(session_expiry_leaves_connected_sessions_alone) {
+    BedT<AllowAllSecurity, Recorder, ExpiringTraits> x;
+    wire::ConnectOpts o;
+    o.clean = false;
+    o.keepalive_s = 0;  // nothing else may reclaim it either
+    x.connect(0, "here", o);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    x.now += ExpiringTraits::session_expiry_ms * 4;
+    x.b.tick(x.now);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 0u);
+    CHECK(!x.t.logs[0].closed);
+}
 
 // ------------------------------------------ retained values gone stale
 

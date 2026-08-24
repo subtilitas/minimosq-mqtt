@@ -73,6 +73,23 @@ struct DefaultTraits {
     // an attacker needs. The member is optional: traits that omit it
     // behave as if it were 0.
     static constexpr uint32_t max_idle_ms = 0;
+
+    // Discard a disconnected persistent (clean-session=0) session after
+    // this long without a connection. 0 disables it, which is the letter
+    // of MQTT 3.1.1 — the protocol has no session expiry, so a session
+    // is meant to live until its client returns.
+    //
+    // That is fine for a closed system and untenable for an open one. A
+    // client that connects with clean-session=0 and then disconnects
+    // cleanly leaves its session behind forever; max_sessions of those
+    // fill the pool with no connection left to reclaim, and every later
+    // client gets CONNACK 0x03. Independently of this timer the broker
+    // evicts the longest-disconnected session rather than refuse a new
+    // client, so a full pool is never fatal — but the timer is what
+    // stops dead sessions accumulating in the first place, and eviction
+    // is the fallback, not the plan. The member is optional: traits that
+    // omit it behave as if it were 0.
+    static constexpr uint32_t session_expiry_ms = 0;
 };
 
 }  // namespace minimosq

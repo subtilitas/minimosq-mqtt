@@ -105,7 +105,7 @@ struct AllowAllSecurity {
 
 // ------------------------------------------------ optional trait probes
 //
-// Both members below were added after the initial release. Detecting
+// The members below were added after the initial release. Detecting
 // them instead of requiring them keeps existing user-written Traits
 // compiling unchanged.
 
@@ -116,6 +116,15 @@ struct traits_max_idle_ms {
 template <typename T>
 struct traits_max_idle_ms<T, decltype((void)T::max_idle_ms)> {
     static constexpr uint32_t value = T::max_idle_ms;
+};
+
+template <typename T, typename = void>
+struct traits_session_expiry_ms {
+    static constexpr uint32_t value = 0;
+};
+template <typename T>
+struct traits_session_expiry_ms<T, decltype((void)T::session_expiry_ms)> {
+    static constexpr uint32_t value = T::session_expiry_ms;
 };
 
 // A transport that publishes its connection capacity lets the broker
@@ -225,6 +234,7 @@ public:
             }
         }
         flush_dead();
+        expire_sessions(now_ms);
     }
 
     // ---------------------------------------------- application-side API
@@ -279,6 +289,7 @@ private:
     // ---------------------------------------------------------- helpers
 
     static constexpr uint32_t max_idle_ms = traits_max_idle_ms<Traits>::value;
+    static constexpr uint32_t session_expiry_ms = traits_session_expiry_ms<Traits>::value;
 
     // ---------------------------------------------------- observability
     //
@@ -454,6 +465,47 @@ private:
         }
     }
 
+    // ------------------------------------------------- session lifetime
+    //
+    // MQTT 3.1.1 has no session expiry: a clean-session=0 session is
+    // meant to live until its client returns. Taken literally that lets
+    // a client fill max_sessions with sessions nothing will ever come
+    // back for, leaving no connection to reclaim and every later client
+    // refused. The two mechanisms below bound that. The timer is the
+    // policy; the eviction is the guarantee that a full pool never means
+    // a refused client.
+
+    void expire_sessions(uint32_t now_ms) {
+        if (session_expiry_ms == 0) {
+            return;
+        }
+        sessions_.for_each([&](SessionT& s) {
+            if (s.connected()) {
+                return;
+            }
+            if (deadline_passed(now_ms, s.disconnect_ms + session_expiry_ms)) {
+                notify_session(EventKind::session_expired, s);
+                sessions_.release(&s);  // releasing during for_each is safe
+            }
+        });
+    }
+
+    // The disconnected session that has been gone longest, or nullptr if
+    // every session currently has a connection.
+    SessionT* oldest_disconnected_session() noexcept {
+        SessionT* oldest = nullptr;
+        sessions_.for_each([&](SessionT& s) {
+            if (s.connected()) {
+                return;
+            }
+            if (oldest == nullptr ||
+                static_cast<int32_t>(s.disconnect_order - oldest->disconnect_order) < 0) {
+                oldest = &s;
+            }
+        });
+        return oldest;
+    }
+
     void teardown(size_t ci) {
         Conn& c = conns_[ci];
         SessionT* s = session_of(c);
@@ -467,6 +519,11 @@ private:
 
         if (s != nullptr) {
             s->conn = SessionT::no_conn;
+            // Stamped even for clean sessions (released just below) so
+            // there is one place that records "this session lost its
+            // connection at T".
+            s->disconnect_ms = now_ms_;
+            s->disconnect_order = ++disconnect_order_;
             if (s->has_will) {
                 // Publish the will exactly like a client PUBLISH
                 // [MQTT-3.1.2-8]: same authorization, retained if
@@ -774,6 +831,20 @@ private:
         SessionT* s = existing;
         if (s == nullptr) {
             s = sessions_.alloc();
+            if (s == nullptr) {
+                // The pool is full. Every session in it that still has a
+                // connection is in use, but a disconnected persistent
+                // session is only a promise to a client that may never
+                // come back — and MQTT 3.1.1 gives it no expiry, so
+                // without this the first max_sessions clients to
+                // disconnect lock the broker shut. Break the oldest such
+                // promise rather than refuse the client in front of us.
+                if (SessionT* victim = oldest_disconnected_session()) {
+                    notify_session(EventKind::session_evicted, *victim);
+                    sessions_.release(victim);
+                    s = sessions_.alloc();
+                }
+            }
             if (s == nullptr) {
                 refuse(ci, ConnackCode::server_unavailable, client_id);
                 return;
@@ -1100,6 +1171,9 @@ private:
     RetainedStore<Traits> retained_;
     uint8_t out_[out_size];
     uint32_t now_ms_ = 0;
+    // Monotonic ticket stamped on each disconnect, so "gone longest" is
+    // a total order independent of the clock.
+    uint32_t disconnect_order_ = 0;
     uint16_t auto_id_counter_ = 0;
 };
 
