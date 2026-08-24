@@ -494,7 +494,7 @@ Two corrections to the record above, for honesty:
 | ASan + UBSan, `-fno-sanitize-recover=all` | 215/215 pass, zero trips |
 | clang-format 18.1.3 / clang-tidy 18.1.1 gates | clean, 0 findings |
 | End-to-end against stock `mosquitto_pub`/`mosquitto_sub` | pass |
-| Coverage (`tools/coverage.py`, GCC 13, Codecov-comparable) | **89.4%** fully covered (was 87.4%), 95.6% executed, 85.0% branch — floors are 85/80 |
+| Coverage (`tools/coverage.py`, GCC 13, Codecov-comparable) | **89.7%** fully covered, 95.8% executed, 85.3% branch — floors are 85/80. The parent commit measured on the same toolchain is 88.9% / 95.3% / 85.6%, so line coverage rose and branch coverage slipped 0.3 points; both stay inside the gate. (The README's 87.4% is CI's pinned compiler, not this one — the two are not comparable, which is the point that note makes.) |
 | `sizeof(Broker<DefaultTraits, …>)` | 78,152 → **78,288 B** (+136: 8 bytes per session for the disconnect bookkeeping, plus alignment) |
 
 Each fix has a regression test in `tests/test_broker_lifecycle.cpp`
