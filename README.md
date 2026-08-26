@@ -243,3 +243,7 @@ bridging, persistence across reboots.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+In collaboration with Claude Code.
