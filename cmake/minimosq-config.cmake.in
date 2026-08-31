@@ -1,0 +1,16 @@
+# Package config for find_package(minimosq).
+#
+# minimosq is header-only: the imported target minimosq::minimosq carries
+# an include directory and the C++17 requirement, and nothing else. There
+# are no dependencies to find and no libraries to link.
+#
+#     find_package(minimosq 0.4 REQUIRED)
+#     target_link_libraries(my_app PRIVATE minimosq::minimosq)
+#
+# SPDX-License-Identifier: MIT
+
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/minimosq-targets.cmake")
+
+check_required_components(minimosq)

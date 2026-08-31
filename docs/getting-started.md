@@ -11,15 +11,45 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-With CMake, consuming the library from another project is:
+With CMake, consuming the library from another project is one of:
 
 ```cmake
+# vendored in your tree
 add_subdirectory(third_party/minimosq-mqtt)
+
+# fetched at configure time
+include(FetchContent)
+FetchContent_Declare(minimosq
+  GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
+  GIT_TAG v0.4.0)
+FetchContent_MakeAvailable(minimosq)
+
+# installed system-wide or into a prefix
+find_package(minimosq 0.4 REQUIRED)
+
 target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
 
 `minimosq::minimosq` is an INTERFACE target: it contributes the include
 path and a C++17 requirement, nothing else.
+
+Installing is a header copy plus the package config `find_package` needs:
+
+```sh
+cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --install build
+```
+
+A vendored or installed copy identifies itself through
+`<minimosq/version.hpp>`, which the umbrella header pulls in:
+
+```cpp
+static_assert(MINIMOSQ_VERSION_AT_LEAST(0, 4, 0), "minimosq too old");
+```
+
+The version compatibility rule is the 0.x one: `find_package(minimosq
+0.4)` accepts any 0.4.x, and rejects 0.5 — minor versions are not
+promised to be compatible before 1.0.
 
 ## A complete broker
 

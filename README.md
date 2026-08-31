@@ -152,7 +152,25 @@ seam carries TLS: see [docs/tls.md](docs/tls.md).
 ## Building
 
 The library itself is header-only — add `include/` to your include
-path. Tests and examples:
+path, or pick it up with CMake:
+
+```cmake
+# installed (cmake --install build), or from a package manager
+find_package(minimosq 0.4 REQUIRED)
+
+# or vendored, without installing anything
+add_subdirectory(third_party/minimosq-mqtt)
+
+target_link_libraries(my_app PRIVATE minimosq::minimosq)
+```
+
+`minimosq::minimosq` is an INTERFACE target: an include path and a C++17
+requirement, nothing else. `<minimosq/version.hpp>` identifies the copy
+you have — `MINIMOSQ_VERSION_AT_LEAST(0, 4, 0)` works in the
+preprocessor, which matters for a library people vendor by copying
+headers.
+
+Tests and examples:
 
 ```sh
 cmake -B build -DMINIMOSQ_WERROR=ON
