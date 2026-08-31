@@ -1,6 +1,28 @@
 cmake_minimum_required(VERSION 3.16)
 project(minimosq VERSION 0.4.0 LANGUAGES CXX)
 
+# The version is written twice: here, which is what find_package() and the
+# installed package version file report, and in include/minimosq/version.hpp,
+# which is all a vendored copy of the headers carries. Check them against
+# each other at configure time rather than trusting a future release to
+# remember both — this runs in every build, local and CI, so drift cannot
+# survive as far as a tag.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/include/minimosq/version.hpp" MINIMOSQ_VERSION_HEADER)
+foreach(part MAJOR MINOR PATCH)
+    if(NOT MINIMOSQ_VERSION_HEADER MATCHES "#define MINIMOSQ_VERSION_${part} ([0-9]+)")
+        message(FATAL_ERROR
+            "include/minimosq/version.hpp: MINIMOSQ_VERSION_${part} not found.")
+    endif()
+    set(MINIMOSQ_HEADER_${part} "${CMAKE_MATCH_1}")
+endforeach()
+set(MINIMOSQ_HEADER_VERSION
+    "${MINIMOSQ_HEADER_MAJOR}.${MINIMOSQ_HEADER_MINOR}.${MINIMOSQ_HEADER_PATCH}")
+if(NOT MINIMOSQ_HEADER_VERSION VERSION_EQUAL PROJECT_VERSION)
+    message(FATAL_ERROR
+        "Version drift: CMakeLists.txt says ${PROJECT_VERSION}, "
+        "include/minimosq/version.hpp says ${MINIMOSQ_HEADER_VERSION}. Update both.")
+endif()
+
 # minimosq is a header-only library. Consumers only need the include path
 # and a C++17 compiler; nothing is compiled for the library itself.
 add_library(minimosq INTERFACE)

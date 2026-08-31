@@ -170,7 +170,7 @@ mosquitto_pub -p 1883 -q 2 -t demo/hello -m 'hi' -r
 
 ## Testing and coverage
 
-215 test cases across the protocol, broker, ACL and transport layers,
+217 test cases across the protocol, broker, ACL and transport layers,
 run on every push under GCC and Clang, 32-bit and MSVC, plus
 AddressSanitizer + UndefinedBehaviorSanitizer and an end-to-end smoke
 test against stock `mosquitto` clients. The whole repository builds
