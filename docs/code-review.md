@@ -560,7 +560,7 @@ project: an SBOM emitted from `release.yml`, signed releases, a
 reproducible tarball, and the in-tree libFuzzer target and differential
 topic matcher this document already recommended.
 
-Three items from this list were done for the v0.4.0 release:
+Three items from this list were done for the v0.5.0 release:
 
 - **`SECURITY.md`** — disclosure through GitHub private vulnerability
   reporting rather than an email address, plus the list of documented
@@ -576,5 +576,5 @@ Three items from this list were done for the v0.4.0 release:
   `release.yml`'s comment about what "consumers see through
   `find_package`" described something that did not exist. Verified by
   installing to a prefix and building a consumer against it.
-  `SameMinorVersion` compatibility, because 0.4 and 0.5 are not promised
+  `SameMinorVersion` compatibility, because 0.5 and 0.6 are not promised
   to be interchangeable.
