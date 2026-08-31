@@ -123,7 +123,7 @@ Full details, the `TableAcl` component, and the threat model are in
 | Valid filter beyond `max_topic_len`, or subscription table full | SUBACK 0x80 for that entry |
 | Duplicate identical filter within one SUBSCRIBE | one subscription, one return code per entry, retained messages replayed once |
 | SUBSCRIBE/UNSUBSCRIBE that is a protocol error | validated in full before anything is applied, so the packet has no partial effect |
-| Client connects with keep-alive 0 | never timed out, unless `max_idle_ms` is set (see [Security](Security)) |
+| Client connects with keep-alive 0 | never timed out, unless `max_idle_ms` is set (see [Security](security.md)) |
 | Empty client id, clean session | server assigns a unique `mmq-<n>` id |
 | Empty client id, persistent session | CONNACK 0x02, connection closed |
 | Retained store full | best effort: not stored, still forwarded live |
@@ -175,10 +175,12 @@ surface as a single tagged `Event`. See
 [observability.md](observability.md) for the contract and the event
 table.
 
-The seam exists because the alternative is that the interesting cases are
-invisible: a QoS 1 publish is acknowledged to its publisher before the
-broker knows whether every subscriber can be given a copy, so a drop
-after that point could not be seen from either end.
+The seam exists because the interesting cases are otherwise invisible. A
+QoS 1 PUBLISH is routed before its PUBACK goes out, so the broker knows
+perfectly well that a subscriber was skipped — 3.1.1 simply gives it no
+way to say so. The publisher is acknowledged regardless, and the
+subscriber never learns the message existed. Without an event, nobody
+can see the drop from either end.
 
 ## Out of scope (deliberately)
 

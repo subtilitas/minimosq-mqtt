@@ -9,7 +9,7 @@ a millisecond clock — and choosing capacities that fit your RAM.
 
 | Requirement | Notes |
 | --- | --- |
-| C++17 compiler | GCC 8+, Clang 7+, IAR 8.40+, ARM Compiler 6. `-fno-exceptions -fno-rtti` are supported, not required |
+| C++17 compiler | CI builds GCC, Clang (64- and 32-bit) and MSVC. Any conforming C++17 compiler should do — the core uses no language extension and no library beyond the three headers below. `-fno-exceptions -fno-rtti` are supported, not required |
 | `<cstdint>`, `<cstddef>`, `<new>` | Freestanding headers; `<new>` is needed for placement `new` and `std::launder` |
 | A monotonic millisecond counter | Any `uint32_t`; wrap-around is handled |
 | Somewhere to put the broker | Static storage is the intended home — see sizing below |
@@ -44,8 +44,8 @@ declare the broker at namespace scope for this reason.
 
 ## ESP32 (ESP-IDF)
 
-Yes — and with less work than most targets, because ESP-IDF's lwIP
-provides BSD sockets and `poll()`, so the bundled
+Less work than most targets: ESP-IDF's lwIP provides BSD sockets and
+`poll()`, so the bundled
 [`TcpTransport`](https://github.com/subtilitas/minimosq-mqtt/blob/main/include/minimosq/transports/posix/tcp.hpp)
 compiles and runs as-is. `clock_gettime(CLOCK_MONOTONIC)` is available
 too, so `posix_now_ms()` works unchanged.
@@ -102,8 +102,8 @@ Points specific to the ESP32 worth getting right:
   below it, leaving room for the listening socket and anything else the
   firmware opens.
 * **RAM.** An ESP32 has roughly 320 KB of DRAM, much of it claimed by
-  Wi-Fi and lwIP buffers. The 4-connection configuration above costs
-  about 13 KB, which is comfortable; `DefaultTraits` at ~78 KB is usually
+  Wi-Fi and lwIP buffers. The configuration above measures 12,680 bytes,
+  which is comfortable; `DefaultTraits` at ~78 KB is usually
   still fine, but measure with `heap_caps_get_free_size(MALLOC_CAP_8BIT)`
   before and after. The broker itself lives in `.bss`, so it never
   competes with the heap at runtime.
@@ -117,7 +117,7 @@ Points specific to the ESP32 worth getting right:
 * **Exceptions.** IDF disables C++ exceptions by default, which suits
   minimosq exactly — nothing in the library throws.
 * **TLS.** ESP-IDF bundles mbedTLS, which is the engine the
-  [TLS](TLS) adapter is designed around.
+  [TLS](tls.md) adapter is designed around.
 
 The same recipe applies with minor edits to any FreeRTOS + lwIP target.
 
@@ -130,7 +130,7 @@ The same recipe applies with minor edits to any FreeRTOS + lwIP target.
   stack). Write a transport: accept a connection, hand the broker its
   index and bytes, and implement `send`/`close`. The
   [pipe transport](https://github.com/subtilitas/minimosq-mqtt/blob/main/include/minimosq/transports/posix/pipe.hpp)
-  (~150 lines) is the smallest worked example. See [Transports](Transports).
+  (~150 lines) is the smallest worked example. See [Transports](transports.md).
 * **Non-IP links** — RS-485, USB CDC, SPI to a radio module. MQTT only
   needs an ordered reliable byte stream, and the transport interface is
   agnostic about where those bytes come from.

@@ -56,6 +56,10 @@ SIDEBAR = [
 # Repository paths that become wiki pages, for link rewriting.
 PATH_TO_PAGE = {src: page for src, page, _ in CURATED}
 
+# Every page name the wiki will have, including the derived ones that have
+# no source file. A link that already names one is left alone.
+WIKI_PAGES = {page for page, _ in SIDEBAR}
+
 HEADER_ORDER = [
     ("Core", "include/minimosq/core"),
     ("Protocol", "include/minimosq/protocol"),
@@ -392,8 +396,14 @@ def strip_comment(line):
 # --------------------------------------------------------- link rewriting
 
 
-def rewrite_links(text, repo_url):
+def rewrite_links(text, repo_url, src_dir=""):
     """Point Markdown links at wiki pages or at files on GitHub.
+
+    Links are resolved relative to the file they appear in, the way a
+    Markdown renderer does, so the same link works both in the repository
+    and in the generated wiki. A target that already names a wiki page
+    (Configuration, API-Reference — the derived pages have no source file)
+    is left alone; rewriting it would produce a blob URL that 404s.
 
     Fenced code blocks are left alone: C++ such as `operator[](size_t)`
     looks exactly like a Markdown link.
@@ -405,15 +415,17 @@ def rewrite_links(text, repo_url):
             return match.group(0)
         path = target.split("#")[0]
         anchor = target[len(path):]
-        # Links between docs/ files, written relative to docs/.
-        for candidate in (path, "docs/" + path):
+        if path in WIKI_PAGES:
+            return match.group(0)
+        repo_path = os.path.normpath(os.path.join(src_dir, path)).replace(os.sep, "/")
+        for candidate in (repo_path, path, "docs/" + path):
             if candidate in PATH_TO_PAGE:
                 page = PATH_TO_PAGE[candidate]
                 # A label that is just the path reads badly in a wiki.
                 if label in (path, candidate, os.path.basename(path)):
                     label = page.replace("-", " ")
                 return f"[{label}]({page}{anchor})"
-        return f"[{label}]({repo_url}/blob/main/{path}{anchor})"
+        return f"[{label}]({repo_url}/blob/main/{repo_path}{anchor})"
 
     out, in_fence = [], False
     for line in text.splitlines():
@@ -673,7 +685,8 @@ def main():
         if not os.path.exists(path):
             problems.append(f"missing curated source: {src}")
             continue
-        text = demote_title(rewrite_links(read(path), repo_url), title)
+        text = demote_title(
+            rewrite_links(read(path), repo_url, os.path.dirname(src)), title)
         write(os.path.join(out_dir, page + ".md"), text)
         written.append(page)
 

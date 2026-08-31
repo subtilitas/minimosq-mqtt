@@ -46,7 +46,7 @@ The rules that matter:
   keep-alive and CONNECT-handshake timeouts will not fire.
 
 The full contract, including the reasoning, is documented in
-[`include/minimosq/transport.hpp`](include/minimosq/transport.hpp).
+[`include/minimosq/transport.hpp`](../include/minimosq/transport.hpp).
 
 ### Publish your capacity
 
@@ -65,8 +65,10 @@ slot array. With the constant published, that combination fails to
 build instead. Transports that stay silent are assumed to be sized
 correctly.
 
-The bundled transports also bounds-check the index at run time and
-refuse one that is out of range, rather than trusting the caller.
+`StreamServerTransport` and `TlsAdapter` also bounds-check the index at
+run time and refuse one out of range, rather than trusting the caller.
+`PipeTransport` serves a single connection and ignores the index
+entirely, so it has nothing to check.
 
 ### Do not drain one connection forever
 
@@ -129,12 +131,13 @@ else.
 
 ## Writing your own
 
-The pipe transport is about 150 lines and implements the whole contract,
-so it is the best template. The shape is always:
+The pipe transport is 150 lines of code and implements the whole
+contract, so it is the best template. The shape is always:
 
 1. Own a fixed array of connection slots, sized by `max_connections`.
 2. On accept: pick a free slot, call `conn_open(slot, now)`.
-3. On readable: `conn_data(slot, bytes, now)` until the read would block.
+3. On readable: `conn_data(slot, bytes, now)`, for a bounded number of
+   reads — see above; whatever is left waits for the next pass.
 4. On EOF or error: free the slot, call `conn_closed(slot)`.
 5. In `send()`: append to that slot's output buffer, try to flush, and
    return `false` if the buffer overflowed.
@@ -158,4 +161,4 @@ TcpTransport  ⟷  TlsAdapter<Engine>  ⟷  Broker
  (ciphertext)     (your TLS library)     (plaintext)
 ```
 
-See [TLS](TLS) for the engine interface and the mbedTLS mapping.
+See [TLS](tls.md) for the engine interface and the mbedTLS mapping.

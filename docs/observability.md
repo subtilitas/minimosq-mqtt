@@ -1,10 +1,9 @@
 # Observability
 
-The broker decides a great many things it used to keep to itself: why a
-connection went away, which packet was a protocol violation, which
-retained message could not be stored, which delivery was dropped and for
-whom. `Observer` — the fourth `Broker` template parameter — is where
-those decisions come out.
+`Observer`, the fourth `Broker` template parameter, is where the broker's
+decisions come out: why a connection went away, which packet was a
+protocol violation, which retained message could not be stored, which
+delivery was dropped and for whom.
 
 It follows the same static-polymorphism pattern as the transport and
 security policies: one method, no virtuals, no allocation. The default,
@@ -13,16 +12,22 @@ does not want events pays nothing for the seam.
 
 ```cpp
 struct MyObserver {
+    Sink* sink = nullptr;
+
     void on_event(const minimosq::Event& e) noexcept {
-        log_line(minimosq::event_kind_name(e.kind), e.client_id, e.topic);
+        sink->write(minimosq::event_kind_name(e.kind), e.client_id, e.topic);
     }
 };
 
 minimosq::Broker<Traits, Transport, minimosq::AllowAllSecurity, MyObserver>
     broker{transport};
 
-broker.observer().set_sink(&my_sink);   // configure it like security()
+broker.observer().sink = &my_sink;   // the broker owns it; reach it like security()
 ```
+
+The observer is a member of the broker, default-constructed with it, so
+anything it needs is configured through `observer()` after construction —
+the same arrangement as `security()`.
 
 ## The contract
 
@@ -34,7 +39,7 @@ broker.observer().set_sink(&my_sink);   // configure it like security()
   only for the duration of the call.
 * Events are notifications, not a control point. Nothing the observer
   does changes what the broker then does. Authorization decisions belong
-  in the [Security](Security) policy, which is a control point.
+  in the [Security](security.md) policy, which is a control point.
 * Adding a new `EventKind` is not a breaking change: an observer
   switching on `kind` simply does not match the new value. That is why
   this is one method with a tagged struct rather than a method per event.
@@ -77,7 +82,7 @@ rather than stale data.
 | `receive_denied` | `authorize_receive` said no for one delivery | `ci`, `client_id`, `topic` |
 | `retained_store_failed` | the store is full, or the message is too large to own | `topic` |
 | `retained_stale_purged` | an unstorable update evicted the value it replaces | `topic` |
-| `delivery_dropped` | a QoS>0 delivery was acknowledged and then not made | `client_id`, `topic`, `qos`, `err` |
+| `delivery_dropped` | a QoS>0 delivery was skipped; the publisher is acknowledged anyway | `client_id`, `topic`, `qos`, `err` |
 
 `err` on `delivery_dropped` distinguishes the two causes: `oversize` (the
 payload is larger than `max_payload_len`, so no owned copy is possible)
@@ -89,10 +94,11 @@ Three things, in rough order of how often they matter.
 
 **Operations.** Without a seam, the only questions answerable from
 outside the broker are "did it accept my credentials" and "did my message
-arrive". `delivery_dropped` in particular closes a real hole: a QoS 1
-publish is acknowledged to its publisher before the broker knows whether
-every subscriber can be given a copy, so a drop after that point is
-invisible to both ends. Now it is one event.
+arrive". `delivery_dropped` closes the worst hole. Routing happens before
+the PUBACK, so the broker knows a subscriber was skipped — but 3.1.1 has
+no "not delivered" acknowledgement, so the publisher is acknowledged
+anyway and the subscriber never learns the message existed. The drop is
+invisible from both ends unless the broker says so.
 
 **Security monitoring.** `connect_refused`, `publish_denied`,
 `subscribe_denied`, `receive_denied` and `session_taken_over` are the
@@ -101,16 +107,15 @@ events an intrusion-detection rule would key on. They are also the ones a
 for the ones it cannot see, like `protocol_violation` and
 `transport_send_failed`.
 
-**Compliance.** IEC 62443-4-2 CR 6.1 (audit log accessibility) and CR 6.2
-(continuous monitoring), and CR 2.8–2.12 (auditable events, storage
-capacity, response to audit processing failures, timestamps,
-non-repudiation), all require that security-relevant events be recorded.
-A component that does not surface them cannot have that requirement
-delegated to it, however good its access control is. minimosq does not
-implement an audit log — it has no clock, no storage and no I/O, by
-design — but it now emits the events one is built from. Timestamping is
-the integrator's, which is consistent with the rest of the library:
-`now_ms` is passed in, never read.
+**Compliance.** IEC 62443-4-2 requires that security-relevant events be
+recorded: CR 2.8–2.12 (auditable events, storage capacity, response to
+audit processing failures, timestamps, non-repudiation) and CR 6.1–6.2
+(audit log accessibility, continuous monitoring). A component that does
+not surface its events cannot have that requirement delegated to it,
+however good its access control. minimosq emits the events an audit log
+is built from, and implements no log: that needs a clock, storage and I/O
+it deliberately does not have. Timestamps are the integrator's — `now_ms`
+is passed in, never read.
 
 ## What it deliberately is not
 
