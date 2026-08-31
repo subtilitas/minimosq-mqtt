@@ -25,8 +25,8 @@ you would like credit in the advisory and release notes, say so.
 
 | Version | Supported |
 | --- | --- |
-| 0.4.x | yes |
-| < 0.4 | no — upgrade |
+| 0.5.x | yes |
+| < 0.5 | no — upgrade |
 
 minimosq is header-only, so a fix reaches you by updating the headers.
 There are no binaries to patch and no runtime to restart beyond your own.
