@@ -114,6 +114,11 @@ to roles and roles to readable/writable topic patterns; see
 [examples/tcp_broker_acl.cpp](examples/tcp_broker_acl.cpp) and the
 security section of [docs/design.md](docs/design.md).
 
+To report a vulnerability, see [SECURITY.md](SECURITY.md) — privately,
+through GitHub, not a public issue. It also lists the documented
+limitations that are deliberate and not vulnerabilities (no TLS engine
+is bundled, chief among them).
+
 ## Observability
 
 The fourth template parameter is an observer. The broker decides plenty
@@ -152,7 +157,25 @@ seam carries TLS: see [docs/tls.md](docs/tls.md).
 ## Building
 
 The library itself is header-only — add `include/` to your include
-path. Tests and examples:
+path, or pick it up with CMake:
+
+```cmake
+# installed (cmake --install build), or from a package manager
+find_package(minimosq 0.4 REQUIRED)
+
+# or vendored, without installing anything
+add_subdirectory(third_party/minimosq-mqtt)
+
+target_link_libraries(my_app PRIVATE minimosq::minimosq)
+```
+
+`minimosq::minimosq` is an INTERFACE target: an include path and a C++17
+requirement, nothing else. `<minimosq/version.hpp>` identifies the copy
+you have — `MINIMOSQ_VERSION_AT_LEAST(0, 4, 0)` works in the
+preprocessor, which matters for a library people vendor by copying
+headers.
+
+Tests and examples:
 
 ```sh
 cmake -B build -DMINIMOSQ_WERROR=ON
@@ -170,7 +193,7 @@ mosquitto_pub -p 1883 -q 2 -t demo/hello -m 'hi' -r
 
 ## Testing and coverage
 
-215 test cases across the protocol, broker, ACL and transport layers,
+217 test cases across the protocol, broker, ACL and transport layers,
 run on every push under GCC and Clang, 32-bit and MSVC, plus
 AddressSanitizer + UndefinedBehaviorSanitizer and an end-to-end smoke
 test against stock `mosquitto` clients. The whole repository builds

@@ -64,6 +64,7 @@ HEADER_ORDER = [
     ("Transports", "include/minimosq/transport.hpp"),
     ("Transport implementations", "include/minimosq/transports"),
     ("Umbrella header", "include/minimosq/minimosq.hpp"),
+    ("Version", "include/minimosq/version.hpp"),
 ]
 
 

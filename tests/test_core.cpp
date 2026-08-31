@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: MIT
 #include "test.hpp"
 
+#include <cstdio>
+
 #include <minimosq/core/error.hpp>
 #include <minimosq/core/fixed_buffer.hpp>
 #include <minimosq/core/fixed_string.hpp>
 #include <minimosq/core/pool.hpp>
 #include <minimosq/core/span.hpp>
 #include <minimosq/core/static_vector.hpp>
+#include <minimosq/version.hpp>
 
 using namespace minimosq;
 
@@ -310,4 +313,43 @@ TEST(err_name_covers_every_code) {
             CHECK(!is_ok(c.code));
         }
     }
+}
+
+// -------------------------------------------------------------- version
+
+// The version exists in three forms — macros, constexpr values and a
+// string — plus a fourth in CMakeLists.txt that CMake checks against this
+// header at configure time. These check that the three in the header
+// cannot disagree with each other.
+TEST(version_macros_agree_with_constants) {
+    CHECK_EQ(version_major, MINIMOSQ_VERSION_MAJOR);
+    CHECK_EQ(version_minor, MINIMOSQ_VERSION_MINOR);
+    CHECK_EQ(version_patch, MINIMOSQ_VERSION_PATCH);
+    CHECK_EQ(MINIMOSQ_VERSION,
+             MINIMOSQ_VERSION_NUMBER(version_major, version_minor, version_patch));
+
+    // The string is built from the same three numbers, so this is really
+    // a check that the stringification survived two macro expansions
+    // rather than emitting "MINIMOSQ_VERSION_MAJOR.".
+    char expected[16];
+    const int n = std::snprintf(expected, sizeof expected, "%d.%d.%d", version_major, version_minor,
+                                version_patch);
+    CHECK(n > 0);
+    CHECK(static_cast<size_t>(n) < sizeof expected);
+    CHECK(StrView(version_string) == StrView(expected));
+    CHECK(StrView(MINIMOSQ_VERSION_STRING) == StrView(version_string));
+}
+
+// Ordering has to hold across a component boundary: the packing gives
+// each component three digits, so 0.4.0 must not compare below 0.3.999.
+TEST(version_at_least_orders_components) {
+    CHECK(MINIMOSQ_VERSION_AT_LEAST(0, 0, 0));
+    CHECK(MINIMOSQ_VERSION_AT_LEAST(MINIMOSQ_VERSION_MAJOR, MINIMOSQ_VERSION_MINOR,
+                                    MINIMOSQ_VERSION_PATCH));
+    CHECK(!MINIMOSQ_VERSION_AT_LEAST(MINIMOSQ_VERSION_MAJOR, MINIMOSQ_VERSION_MINOR,
+                                     MINIMOSQ_VERSION_PATCH + 1));
+    CHECK(!MINIMOSQ_VERSION_AT_LEAST(MINIMOSQ_VERSION_MAJOR + 1, 0, 0));
+
+    CHECK(MINIMOSQ_VERSION_NUMBER(0, 4, 0) > MINIMOSQ_VERSION_NUMBER(0, 3, 999));
+    CHECK(MINIMOSQ_VERSION_NUMBER(1, 0, 0) > MINIMOSQ_VERSION_NUMBER(0, 999, 999));
 }
