@@ -334,7 +334,8 @@ TEST(version_macros_agree_with_constants) {
     char expected[16];
     const int n = std::snprintf(expected, sizeof expected, "%d.%d.%d", version_major, version_minor,
                                 version_patch);
-    CHECK(n > 0 && static_cast<size_t>(n) < sizeof expected);
+    CHECK(n > 0);
+    CHECK(static_cast<size_t>(n) < sizeof expected);
     CHECK(StrView(version_string) == StrView(expected));
     CHECK(StrView(MINIMOSQ_VERSION_STRING) == StrView(version_string));
 }
