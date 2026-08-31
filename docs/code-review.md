@@ -556,10 +556,25 @@ oversights.
     correction above): give it a capacity argument.
 
 Non-code, cheap, and disproportionately visible to anyone evaluating the
-project: a `SECURITY.md` with a disclosure policy and a contact, an SBOM
-emitted from `release.yml`, signed releases, a reproducible tarball, a
-version macro in a header (the version lives only in `CMakeLists.txt`, so
-a vendored copy is unidentifiable), `install()` rules and a package
-config — `find_package(minimosq)` cannot work today despite
-`release.yml` asserting it does — and the in-tree libFuzzer target and
-differential topic matcher this document already recommended.
+project: an SBOM emitted from `release.yml`, signed releases, a
+reproducible tarball, and the in-tree libFuzzer target and differential
+topic matcher this document already recommended.
+
+Three items from this list were done for the v0.4.0 release:
+
+- **`SECURITY.md`** — disclosure through GitHub private vulnerability
+  reporting rather than an email address, plus the list of documented
+  limitations that are *not* vulnerabilities, so a reporter does not
+  rediscover the ranked issues above.
+- **A version macro** (`include/minimosq/version.hpp`). The release
+  tarball ships the headers alone, so the version living only in
+  `CMakeLists.txt` made a vendored copy unidentifiable. The two are now
+  compared at CMake configure time, so drift fails the build rather than
+  surviving to a tag.
+- **`install()` rules and a package config.** `find_package(minimosq)`
+  genuinely could not work — there were no install rules at all, and
+  `release.yml`'s comment about what "consumers see through
+  `find_package`" described something that did not exist. Verified by
+  installing to a prefix and building a consumer against it.
+  `SameMinorVersion` compatibility, because 0.4 and 0.5 are not promised
+  to be interchangeable.

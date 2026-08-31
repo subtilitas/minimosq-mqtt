@@ -114,6 +114,11 @@ to roles and roles to readable/writable topic patterns; see
 [examples/tcp_broker_acl.cpp](examples/tcp_broker_acl.cpp) and the
 security section of [docs/design.md](docs/design.md).
 
+To report a vulnerability, see [SECURITY.md](SECURITY.md) — privately,
+through GitHub, not a public issue. It also lists the documented
+limitations that are deliberate and not vulnerabilities (no TLS engine
+is bundled, chief among them).
+
 ## Observability
 
 The fourth template parameter is an observer. The broker decides plenty

@@ -129,6 +129,10 @@ A complete worked deployment is
 
 ## Threat model and caveats
 
+Found something this section does not account for? Report it privately —
+[SECURITY.md](SECURITY.md) has the disclosure process and the list of
+limitations that are documented rather than defects.
+
 **Passwords travel and rest in plaintext.** That is MQTT 3.1.1: the
 protocol has no challenge-response, and `TableAcl` stores what it is
 given. For anything exposed beyond a trusted link:
