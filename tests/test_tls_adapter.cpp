@@ -175,4 +175,6 @@ TEST(tls_adapter_capacity_is_visible_to_the_broker) {
                   "TLS-wrapped transport opts out of the check silently");
     static_assert(transport_out_buf_size<HsTls>::value >= SmallTraits::max_packet_size,
                   "and this fixture must satisfy it, as Broker requires");
+    CHECK_EQ(transport_out_buf_size<HsTls>::value, HsTls::out_buf_size);
+    CHECK(transport_out_buf_size<HsTls>::value >= SmallTraits::max_packet_size);
 }

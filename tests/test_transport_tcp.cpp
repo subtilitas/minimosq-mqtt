@@ -265,6 +265,8 @@ TEST(tcp_transport_publishes_its_outbound_capacity) {
                   "the transport must publish OutBufSize for Broker to check it");
     static_assert(minimosq::transport_out_buf_size<Small>::value == 2048,
                   "and the detection trait must see it");
+    CHECK_EQ(Small::out_buf_size, size_t{2048});
+    CHECK_EQ(minimosq::transport_out_buf_size<Small>::value, size_t{2048});
 
     // A transport that publishes nothing opts out rather than failing to
     // compile, which is what keeps the check from breaking a third-party
@@ -275,4 +277,5 @@ TEST(tcp_transport_publishes_its_outbound_capacity) {
     };
     static_assert(minimosq::transport_out_buf_size<Unbuffered>::value == 0,
                   "a transport that does not say is left alone");
+    CHECK_EQ(minimosq::transport_out_buf_size<Unbuffered>::value, size_t{0});
 }
