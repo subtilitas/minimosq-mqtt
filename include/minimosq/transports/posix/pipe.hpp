@@ -40,6 +40,10 @@ public:
     // The pipe transport serves exactly one connection, index 0.
     static constexpr size_t max_connections = 1;
 
+    // See StreamServerTransport: published so Broker can check that one
+    // whole packet fits in the outbound ring.
+    static constexpr size_t out_buf_size = OutBufSize;
+
     // See StreamServerTransport: bounded drain so a chatty peer cannot
     // starve broker.tick().
     static constexpr int max_reads_per_pass = 8;

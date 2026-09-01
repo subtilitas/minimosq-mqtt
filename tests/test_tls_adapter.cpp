@@ -169,4 +169,10 @@ TEST(tls_adapter_capacity_is_visible_to_the_broker) {
                   "the adapter must publish its capacity like a raw transport");
     static_assert(transport_max_connections<HsTls>::value == SmallTraits::max_connections,
                   "so Broker's static_assert can check it");
+
+    static_assert(transport_out_buf_size<HsTls>::value == HsTls::out_buf_size,
+                  "the adapter must publish its packet bound as well, or a "
+                  "TLS-wrapped transport opts out of the check silently");
+    static_assert(transport_out_buf_size<HsTls>::value >= SmallTraits::max_packet_size,
+                  "and this fixture must satisfy it, as Broker requires");
 }

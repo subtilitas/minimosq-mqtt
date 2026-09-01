@@ -41,6 +41,11 @@ public:
     // least Traits::max_connections slots.
     static constexpr size_t max_connections = MaxConns;
 
+    // Published so Broker can static_assert that one whole packet fits.
+    // OutBufSize is declared here and max_packet_size in Traits, with
+    // nothing forcing them to agree.
+    static constexpr size_t out_buf_size = OutBufSize;
+
     // Reads taken from one connection per poll pass. Without a cap, a
     // peer that keeps its socket full is drained until EAGAIN, which
     // starves every other connection and stops broker.tick() — and with

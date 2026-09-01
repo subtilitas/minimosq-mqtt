@@ -40,6 +40,13 @@
 //     Traits::max_connections, which catches a mis-sized transport at
 //     compile time instead of as an out-of-bounds write.
 //
+//   - A transport that buffers outbound bytes may publish
+//     `static constexpr size_t out_buf_size`. When it does, Broker
+//     static_asserts that it is at least Traits::max_packet_size: a
+//     buffer smaller than one packet can never send that packet, to any
+//     peer, at any speed, so send() would fail forever rather than
+//     transiently.
+//
 // See transports/posix/ for reference implementations (TCP, unix
 // domain sockets, pipes) and transports/tls_adapter.hpp for how a TLS
 // engine slots in between.
