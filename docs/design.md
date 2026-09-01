@@ -182,6 +182,50 @@ way to say so. The publisher is acknowledged regardless, and the
 subscriber never learns the message existed. Without an event, nobody
 can see the drop from either end.
 
+## Compared with Eclipse Mosquitto
+
+Mosquitto is the reference open-source MQTT broker and the one minimosq
+is tested against — the smoke test drives `mosquitto_pub`/`mosquitto_sub`
+against this broker on every push, because the wire protocol is the same
+and interoperability is the point. The two are not alternatives for the
+same job, though, and the difference is not feature count but *shape*:
+Mosquitto is a program you run, minimosq is an object you link.
+
+| | minimosq | Eclipse Mosquitto |
+| --- | --- | --- |
+| Form | header-only C++17 library | C daemon (plus `libmosquitto` for clients) |
+| Deployment | an object inside your process, typically in `.bss` | a process, started and supervised like any other |
+| Protocol | MQTT 3.1.1 | MQTT 3.1, 3.1.1 and 5.0 |
+| Memory | fixed at compile time; `sizeof(Broker<…>)` is the whole cost, and nothing is allocated after construction | dynamic; grows with connections, subscriptions and queued messages |
+| Configuration | a traits struct and policy types, resolved at compile time | `mosquitto.conf`, read at startup and reloadable |
+| Authentication and ACLs | a `Security` policy you supply; `TableAcl` is the ready-made one | password and ACL files, auth plugins, the dynamic-security plugin |
+| TLS | a documented seam ([tls.md](tls.md)); you bring the engine | built in, via OpenSSL |
+| Persistence across restarts | none | writes sessions and retained messages to disk |
+| Bridging, `$SYS`, WebSockets | none | all three |
+| Logging | an `Observer` policy; no formatting, storage or clock | log files, syslog, stdout, topic-based logging |
+| Threading and event loop | none of its own — you call four entry points from your loop | owns its loop |
+| Dependencies | none in the core; POSIX only in the example transports | OpenSSL for TLS, libwebsockets for WebSockets, an OS with sockets and a filesystem |
+| License | MIT | EPL-2.0 / EDL-1.0 |
+
+**Use Mosquitto** wherever a broker process is a reasonable thing to
+deploy: a gateway, a server, a Linux box with a filesystem. It is mature,
+widely deployed, speaks MQTT 5.0, and does the operational things —
+persistence, bridging, live reconfiguration — that this library
+deliberately does not.
+
+**Use minimosq** when a process is not available or not wanted: a
+microcontroller with no OS to run a daemon on, a firmware image where the
+memory budget must be a compile-time constant, or an application that
+wants the broker *inside* it — sharing its event loop, publishing
+directly through `Broker::publish()` without a loopback client, and
+authorizing against its own identity model rather than a password file.
+
+The honest summary is that minimosq trades away most of what Mosquitto
+does in exchange for two properties Mosquitto does not offer: a broker
+whose entire memory cost is known at compile time, and one that is a
+library rather than a program. If neither of those matters to you, run
+Mosquitto.
+
 ## Out of scope (deliberately)
 
 - MQTT 5.0 (properties, reason codes, shared subscriptions)
