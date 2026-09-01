@@ -182,6 +182,76 @@ way to say so. The publisher is acknowledged regardless, and the
 subscriber never learns the message existed. Without an event, nobody
 can see the drop from either end.
 
+## Why header-only
+
+Not a distribution choice. `Broker<Traits, Transport, Security, Observer>`
+takes four user-supplied types; every capacity is a `Traits` constant, which
+is what makes `sizeof(Broker<...>)` a compile-time constant that can be
+`static_assert`ed against a budget and placed in `.bss`. A template is
+instantiated where it is used, so there is no broker to compile into a
+library until those four parameters are chosen.
+
+Header-only is therefore a consequence of the policy design, not a cause of
+anything. What makes the broker small is the absence of a heap and the fixed
+capacities — those would hold in any form.
+
+### The alternative
+
+Macro configuration plus a compiled library — `#define
+MINIMOSQ_MAX_CONNECTIONS 8` in a config header, compile `broker.c`, ship an
+archive. This is what lwIP, FreeRTOS and mbedTLS do.
+
+| | Macro-configured library | Templates (this design) |
+| --- | --- | --- |
+| Configurations per image | one | any number, each a distinct type |
+| Capacity errors | preprocessor | type system |
+| Transport / security / observer | function pointers or `#ifdef` | types; calls inline |
+| Unused seam (`NullObserver`, `AllowAllSecurity`) | indirect call per event | compiles to nothing |
+| Build product | an archive to link | an include path |
+| Cross-compiling | one archive per toolchain and ABI | nothing to build |
+
+### Measured cost
+
+GCC 13.3, `-O2`, x86-64, best of five:
+
+| Translation unit | Preprocessed | Compile |
+| --- | --- | --- |
+| `#include <minimosq/minimosq.hpp>` + a transport | 9,153 lines | 0.08 s |
+| the same, instantiating and calling a `Broker` | 9,156 lines | 0.32 s |
+| `#include <vector>` and `<string>`, nothing else | 29,927 lines | 0.23 s |
+| empty | — | 0.02 s |
+
+The two costs are separate and only the second is significant. The include
+graph is `<cstdint>`, `<cstddef>` and `<new>`, so pulling in the entire
+library preprocesses to a third of what `<vector>` and `<string>` do, and
+costs a third as much. Instantiating a broker is what takes the 0.32 s, and
+it is paid once per translation unit that does so — normally one.
+
+The multiplier shows up in this repository's own build, where 18 test
+binaries each instantiate the templates afresh: 45 s single-threaded for
+4,958 lines of test source.
+
+Code is duplicated per distinct `Traits`, measured with `NullTransport`:
+
+| Instantiations in one binary | `.text` |
+| --- | --- |
+| one | 4,103 B |
+| three | 10,326 B |
+
+A firmware image with a single configuration never pays that.
+
+### Cost paid in tooling
+
+- `tools/coverage.py` exists because of this. Every instantiation in every
+  test binary emits its own gcov records for the same source lines; tools
+  that sum rather than merge them report ~58% and count `broker.hpp` as
+  4,400 lines against an actual ~950.
+- clang-tidy sees the headers only through translation units that include
+  them, hence the compilation database and `HeaderFilterRegex` in
+  [`.clang-tidy`](../.clang-tidy).
+
+Both are maintainer-side and paid once. The consumer side is an include path.
+
 ## Compared with Eclipse Mosquitto
 
 Mosquitto is the reference open-source MQTT broker and the one minimosq
