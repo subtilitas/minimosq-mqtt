@@ -11,7 +11,7 @@
 // fails the build if the two disagree.
 //
 //     #include <minimosq/version.hpp>
-//     static_assert(MINIMOSQ_VERSION_AT_LEAST(0, 5, 0), "minimosq too old");
+//     static_assert(MINIMOSQ_VERSION_AT_LEAST(0, 6, 0), "minimosq too old");
 //
 // Macros rather than constants alone, because a version check has to work
 // in the preprocessor; the constexpr values below mirror them for code
@@ -22,10 +22,10 @@
 #define MINIMOSQ_VERSION_HPP
 
 #define MINIMOSQ_VERSION_MAJOR 0
-#define MINIMOSQ_VERSION_MINOR 5
+#define MINIMOSQ_VERSION_MINOR 6
 #define MINIMOSQ_VERSION_PATCH 0
 
-// One comparable integer, three digits per component: 0.5.0 -> 5000.
+// One comparable integer, three digits per component: 0.6.0 -> 6000.
 // Minor and patch are therefore bounded by 999, which is ample and keeps
 // a later version from ever comparing below an earlier one.
 #define MINIMOSQ_VERSION_NUMBER(major, minor, patch) ((major) * 1000000 + (minor) * 1000 + (patch))
