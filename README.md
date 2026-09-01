@@ -29,8 +29,10 @@ for embedded use:
   retained messages, wills, keep-alive, persistent sessions with
   offline queueing and DUP retransmission on resume.
 
-MIT licensed. Verified against stock `mosquitto_pub`/`mosquitto_sub`
-clients over all three transports.
+MIT licensed. Every push runs an end-to-end smoke test against stock
+`mosquitto_pub`/`mosquitto_sub` over TCP; the same clients drive the
+unix-socket broker with `--unix`, and the pipe broker through a `socat`
+bridge.
 
 ## A complete broker
 
@@ -124,8 +126,8 @@ is bundled, chief among them).
 The fourth template parameter is an observer. The broker decides plenty
 worth recording — why a connection went away, which packet was a
 protocol violation, which retained message could not be stored, which
-QoS 1 delivery was acknowledged to its publisher and then dropped — and
-this is where it comes out:
+QoS 1 delivery was skipped while its publisher was acknowledged anyway —
+and this is where it comes out:
 
 ```cpp
 struct MyObserver {
@@ -142,7 +144,7 @@ body and optimizes away entirely, so the seam is free if you do not want
 it. There is no logger, no metrics and no audit storage in the library —
 those need a clock, storage and policy, all of which are yours. See
 [docs/observability.md](docs/observability.md) for the contract, the full
-event table, and the IEC 62443 CR 6.x mapping.
+event table, and the mapping to IEC 62443-4-2 CR 2.8–2.12 and CR 6.1–6.2.
 
 ## Custom transports
 

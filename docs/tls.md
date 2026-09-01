@@ -108,10 +108,36 @@ time, to preserve the no-allocation property. TLS records are at most
 16 KiB; on constrained targets negotiate the `max_fragment_length`
 extension and size `TlsAdapter`'s `BufSize` accordingly.
 
+## Limitations to design the Engine around
+
+The adapter is a seam, not a finished TLS transport. Four properties of
+the current implementation constrain what an `Engine` must do:
+
+* **`on_ciphertext()` is called once per `conn_data()`, with no drain
+  loop.** Whatever plaintext does not fit in `BufSize` is not delivered
+  by a later call — it is stranded. Size `BufSize` above the largest
+  plaintext burst a client can produce in one arrival, or have the engine
+  buffer the remainder itself.
+* **`encrypt()` must not fail for a packet the broker will send.**
+  A `false` return makes `send()` fail, which the broker treats as an
+  abnormal disconnect — and that fires the client's will. `BufSize` has
+  to hold the largest outbound packet *plus* the record overhead.
+* **`close()` does not call `reset()`.** The engine keeps its state until
+  the slot is reused and `conn_open()` resets it, so session keys outlive
+  the connection they belong to. Zeroize in the engine if that matters.
+* **No `close_notify` is sent.** The adapter closes the raw connection;
+  peers will see a truncated stream rather than a clean TLS shutdown.
+
 ## Why no bundled engine?
 
 Shipping a real TLS transport would drag a crypto library into the
 dependency-free core, and pretending to do TLS without one would be
-worse. `NullTlsEngine` exists purely to compile-check and demonstrate
-the wiring — it copies bytes through unchanged and is **not** a
-security boundary.
+worse.
+
+`NullTlsEngine` exists to compile-check and demonstrate the wiring: it
+copies bytes through unchanged. **Wired exactly as this document
+describes, it accepts a plain MQTT CONNECT and passes the password across
+in cleartext**, and nothing in the library warns you — there is no
+`static_assert`, no `#warning`, no opt-in macro. It is not a security
+boundary of any kind. Use it to get the plumbing compiling, then replace
+it before anything reaches a network.

@@ -100,7 +100,7 @@ broker.publish("device/status", payload, minimosq::QoS::at_least_once,
 ## Where to go next
 
 * [Configuration](Configuration) — every traits knob, and what it costs
-* [Security](Security) — authentication and topic ACLs
-* [Transports](Transports) — the transport contract and writing your own
-* [Porting](Porting) — ESP32, bare metal, and other targets
-* [Design notes](Design-Notes) — how the broker works internally
+* [Security](security.md) — authentication and topic ACLs
+* [Transports](transports.md) — the transport contract and writing your own
+* [Porting](porting.md) — ESP32, bare metal, and other targets
+* [Design notes](design.md) — how the broker works internally

@@ -3,22 +3,21 @@
 Security in minimosq is layered, and every layer is a policy you control:
 
 1. **Transport security** — TLS below the broker via the adapter seam
-   ([TLS](TLS)), or OS-level isolation with the unix-socket transport
+   ([TLS](tls.md)), or OS-level isolation with the unix-socket transport
    (whose socket file is created `0600` by default; pass a wider mode to
    `open()` deliberately if clients run as other users). The TCP
    transport takes an optional bind address, so `open(1883, "127.0.0.1")`
    keeps a plaintext broker off the network entirely.
 2. **Authentication** — who is connecting.
 3. **Authorization** — what they may publish, subscribe to, and receive.
-4. **Resource protection** — every table is fixed and every refusal is a
-   documented behaviour, so a hostile or broken client can be turned away
-   but cannot make the broker allocate, fragment or fail unpredictably.
-   Read that precisely: it bounds what a client can *cost*, and — with
-   the reclamation described below — how long it can *occupy*. It is not
-   a claim that no client is ever refused; a full table refuses, and that
-   is the design.
+4. **Resource protection** — every table is fixed and every refusal is
+   documented behaviour, so a hostile or broken client cannot make the
+   broker allocate, fragment or fail unpredictably. Precisely: this
+   bounds what a client can *cost*, and — with the reclamation below —
+   how long it can *occupy*. It does not mean no client is ever refused;
+   a full table refuses, by design.
 5. **Observability** — every refusal, denial and drop is reported through
-   the [Observer](Observability) policy, because a resource control you
+   the [Observer](observability.md) policy, because a resource control you
    cannot see working is not one you can operate.
 
 ## The security policy
@@ -125,19 +124,19 @@ Behaviour worth knowing:
   `topic.hpp` implements this and is usable on its own.)
 
 A complete worked deployment is
-[`examples/tcp_broker_acl.cpp`](examples/tcp_broker_acl.cpp).
+[`examples/tcp_broker_acl.cpp`](../examples/tcp_broker_acl.cpp).
 
 ## Threat model and caveats
 
 Found something this section does not account for? Report it privately —
-[SECURITY.md](SECURITY.md) has the disclosure process and the list of
+[SECURITY.md](../SECURITY.md) has the disclosure process and the list of
 limitations that are documented rather than defects.
 
 **Passwords travel and rest in plaintext.** That is MQTT 3.1.1: the
 protocol has no challenge-response, and `TableAcl` stores what it is
 given. For anything exposed beyond a trusted link:
 
-* Run TLS underneath ([TLS](TLS)) — otherwise credentials, topics and
+* Run TLS underneath ([TLS](tls.md)) — otherwise credentials, topics and
   payloads are all readable on the wire.
 * Replace the comparison in `TableAcl::authenticate` with a salted hash
   check, or write your own policy; the interface does not care how you
@@ -170,12 +169,12 @@ These are always on, and tuned through the traits:
 | `max_topic_len` | A PUBLISH or will topic too long to store is refused outright, rather than reaching QoS 0 subscribers and silently skipping QoS>0 ones |
 | `session_expiry_ms` | Discards persistent sessions whose client never came back; see below |
 | Session eviction | A full session pool releases the longest-disconnected session rather than refuse a new client |
-| `max_sessions`, `max_retained`, `max_pending_per_session`, `max_inbound_qos2` | Fixed tables; a full table is refused cleanly (see the policy table in [Design notes](Design-Notes)) |
+| `max_sessions`, `max_retained`, `max_pending_per_session`, `max_inbound_qos2` | Fixed tables; a full table is refused cleanly (see the policy table in [Design notes](design.md)) |
 
 Because nothing is allocated at runtime, there is no fragmentation and no
 out-of-memory path: the worst case is a refused connection or a dropped
 message, both of which are documented behaviours — and both of which are
-reported to the [Observer](Observability), so "the broker is quietly
+reported to the [Observer](observability.md), so "the broker is quietly
 dropping things" is something you can detect rather than infer.
 
 ### Idle clients and `max_idle_ms`
