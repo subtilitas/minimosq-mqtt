@@ -23,9 +23,9 @@
 
 #define MINIMOSQ_VERSION_MAJOR 0
 #define MINIMOSQ_VERSION_MINOR 6
-#define MINIMOSQ_VERSION_PATCH 0
+#define MINIMOSQ_VERSION_PATCH 1
 
-// One comparable integer, three digits per component: 0.6.0 -> 6000.
+// One comparable integer, three digits per component: 0.6.1 -> 6001.
 // Minor and patch are therefore bounded by 999, which is ample and keeps
 // a later version from ever comparing below an earlier one.
 #define MINIMOSQ_VERSION_NUMBER(major, minor, patch) ((major) * 1000000 + (minor) * 1000 + (patch))
