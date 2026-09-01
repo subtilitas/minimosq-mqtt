@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(minimosq VERSION 0.5.0 LANGUAGES CXX)
+project(minimosq VERSION 0.6.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -110,7 +110,7 @@ if(MINIMOSQ_INSTALL)
 
     # ARCH_INDEPENDENT: a consumer's 32-bit build may use headers installed
     # by a 64-bit one. SameMinorVersion, not SameMajorVersion, because this
-    # is a 0.x library — 0.5 and 0.6 are not promised to be compatible.
+    # is a 0.x library — 0.6 and 0.7 are not promised to be compatible.
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/minimosq-config-version.cmake"
         VERSION ${PROJECT_VERSION}

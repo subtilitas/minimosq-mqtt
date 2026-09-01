@@ -21,11 +21,11 @@ add_subdirectory(third_party/minimosq-mqtt)
 include(FetchContent)
 FetchContent_Declare(minimosq
   GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
-  GIT_TAG v0.5.0)
+  GIT_TAG v0.6.0)
 FetchContent_MakeAvailable(minimosq)
 
 # installed system-wide or into a prefix
-find_package(minimosq 0.5 REQUIRED)
+find_package(minimosq 0.6 REQUIRED)
 
 target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
@@ -44,11 +44,11 @@ A vendored or installed copy identifies itself through
 `<minimosq/version.hpp>`, which the umbrella header pulls in:
 
 ```cpp
-static_assert(MINIMOSQ_VERSION_AT_LEAST(0, 5, 0), "minimosq too old");
+static_assert(MINIMOSQ_VERSION_AT_LEAST(0, 6, 0), "minimosq too old");
 ```
 
 The version compatibility rule is the 0.x one: `find_package(minimosq
-0.5)` accepts any 0.5.x, and rejects 0.6 — minor versions are not
+0.6)` accepts any 0.6.x, and rejects 0.7 — minor versions are not
 promised to be compatible before 1.0.
 
 ## A complete broker
