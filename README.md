@@ -153,8 +153,10 @@ A transport is any type with `bool send(size_t, ByteSpan)` and
 (`conn_open`, `conn_data`, `conn_closed`, `tick`). The full contract
 is documented in
 [include/minimosq/transport.hpp](include/minimosq/transport.hpp); the
-pipe transport (~150 lines) is the smallest worked example. The same
-seam carries TLS: see [docs/tls.md](docs/tls.md).
+pipe transport (~150 lines) is the smallest worked example. The bundled
+transports write each connection once per poll pass and set
+`TCP_NODELAY` on TCP; [docs/transports.md](docs/transports.md) has the
+numbers. The same seam carries TLS: see [docs/tls.md](docs/tls.md).
 
 ## Building
 

@@ -8,6 +8,7 @@
 #include <minimosq/transports/posix/pipe.hpp>
 
 #include <csignal>
+#include <cstring>
 #include <unistd.h>
 
 using namespace minimosq;
@@ -162,5 +163,128 @@ TEST(pipe_protocol_error_makes_broker_close) {
     }
     CHECK(t.closed());
     ::close(pp.c2b[1]);
+    ::close(pp.b2c[0]);
+}
+
+// ------------------------------------------------------- write policy
+//
+// Same policy as the stream transport: send() appends, the ring is written
+// once at the end of the pass. See test_transport_tcp.cpp for the rationale.
+
+namespace {
+
+template <typename T>
+struct Scripted {
+    T& t;
+    ByteSpan reply{};
+    int replies = 1;
+    ByteSpan from_tick{};
+    int sends_ok = 0;
+    int sends_failed = 0;
+    int closed = 0;
+
+    explicit Scripted(T& transport) : t(transport) {}
+    Err conn_open(size_t, uint32_t) { return Err::ok; }
+    Err conn_data(size_t ci, ByteSpan, uint32_t) {
+        for (int i = 0; i < replies; ++i) {
+            (t.send(ci, reply) ? sends_ok : sends_failed)++;
+        }
+        return Err::ok;
+    }
+    void conn_closed(size_t) { ++closed; }
+    void tick(uint32_t) {
+        if (!from_tick.empty()) {
+            (t.send(0, from_tick) ? sends_ok : sends_failed)++;
+            from_tick = ByteSpan{};
+        }
+    }
+};
+
+// Read from the broker->client pipe until `want` bytes arrived, pumping
+// the loop in between.
+template <typename T, typename B>
+size_t receive(T& t, B& b, int fd, uint8_t* buf, size_t want) {
+    size_t got = 0;
+    for (int i = 0; i < 50 && got < want; ++i) {
+        const ssize_t r = ::read(fd, buf + got, want - got);
+        if (r > 0) {
+            got += static_cast<size_t>(r);
+        } else {
+            t.poll_once(b, 5);
+        }
+    }
+    return got;
+}
+
+}  // namespace
+
+TEST(pipe_output_from_tick_leaves_in_the_same_pass) {
+    std::signal(SIGPIPE, SIG_IGN);
+    PipePair pp;
+    CHECK(pp.make());
+    set_nonblocking(pp.b2c[0]);
+    Transport t;
+    Scripted<Transport> b{t};
+    CHECK(t.open(pp.c2b[0], pp.b2c[1]));
+    t.poll_once(b, 5);  // opens connection 0
+
+    b.from_tick = wire::bs("tick");
+    t.poll_once(b, 5);  // nothing readable: times out, ticks, must still write
+    CHECK_EQ(b.sends_ok, 1);
+    uint8_t buf[8];
+    CHECK_EQ(receive(t, b, pp.b2c[0], buf, 4), size_t{4});
+    CHECK(std::memcmp(buf, "tick", 4) == 0);
+    ::close(pp.c2b[1]);
+    ::close(pp.b2c[0]);
+}
+
+TEST(pipe_pass_larger_than_the_ring_is_written_not_dropped) {
+    std::signal(SIGPIPE, SIG_IGN);
+    using Small = PipeTransport<256>;
+    PipePair pp;
+    CHECK(pp.make());
+    set_nonblocking(pp.b2c[0]);
+    Small t;
+    Scripted<Small> b{t};
+    CHECK(t.open(pp.c2b[0], pp.b2c[1]));
+    t.poll_once(b, 5);
+
+    uint8_t chunk[100];
+    std::memset(chunk, 0x55, sizeof chunk);
+    b.reply = ByteSpan{chunk, sizeof chunk};
+    b.replies = 8;  // 800 bytes into a 256-byte ring from one conn_data()
+    send_all(pp.c2b[1], wire::make_pingreq().span());
+    t.poll_once(b, 50);
+    CHECK_EQ(b.sends_ok, 8);
+    CHECK_EQ(b.sends_failed, 0);
+    CHECK(!t.closed());
+    uint8_t buf[800];
+    CHECK_EQ(receive(t, b, pp.b2c[0], buf, sizeof buf), sizeof buf);
+    ::close(pp.c2b[1]);
+    ::close(pp.b2c[0]);
+}
+
+TEST(pipe_reply_reaches_a_peer_that_closed_its_write_end) {
+    std::signal(SIGPIPE, SIG_IGN);
+    PipePair pp;
+    CHECK(pp.make());
+    set_nonblocking(pp.b2c[0]);
+    Transport t;
+    Scripted<Transport> b{t};
+    CHECK(t.open(pp.c2b[0], pp.b2c[1]));
+    t.poll_once(b, 5);
+
+    b.reply = wire::bs("pong");
+    send_all(pp.c2b[1], wire::make_pingreq().span());
+    ::close(pp.c2b[1]);  // data, then EOF, in one pass
+    for (int i = 0; i < 20 && !t.closed(); ++i) {
+        t.poll_once(b, 5);
+    }
+    CHECK(t.closed());
+    CHECK_EQ(b.closed, 1);
+    CHECK_EQ(b.sends_ok, 1);
+    uint8_t buf[8];
+    CHECK_EQ(receive(t, b, pp.b2c[0], buf, 4), size_t{4});
+    CHECK(std::memcmp(buf, "pong", 4) == 0);
     ::close(pp.b2c[0]);
 }

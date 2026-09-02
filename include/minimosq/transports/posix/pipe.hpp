@@ -10,6 +10,10 @@
 // The single connection uses index 0; the broker's Traits only needs
 // max_connections >= 1.
 //
+// Write policy is the one StreamServerTransport uses: send() appends,
+// and the ring is written once at the end of each poll pass, after
+// broker.tick().
+//
 // Usage:
 //   minimosq::PipeTransport<> transport;
 //   transport.open(read_fd, write_fd);
@@ -63,6 +67,7 @@ public:
         wfd_ = write_fd;
         started_ = false;
         ring_.clear();
+        dirty_ = false;
         return set_nonblocking(rfd_) && set_nonblocking(wfd_);
     }
 
@@ -72,10 +77,18 @@ public:
 
     bool send(size_t ci, ByteSpan bytes) {
         (void)ci;  // always connection 0
-        if (wfd_ < 0 || !ring_.append(bytes)) {
+        if (wfd_ < 0) {
             return false;
         }
-        flush();
+        if (!ring_.append(bytes)) {
+            // Full mid-pass: write it out and retry once, as the stream
+            // transport does. Only a peer that takes nothing is slow.
+            flush();
+            if (!ring_.append(bytes)) {
+                return false;
+            }
+        }
+        dirty_ = true;
         return true;
     }
 
@@ -117,7 +130,8 @@ public:
         const int rc = ::poll(pfds, n, timeout_ms);
         const uint32_t now = posix_now_ms();
         if (rc < 0) {
-            broker.tick(now);
+            broker.tick(now);  // EINTR: tick anyway, and write what it produced
+            flush_pass();
             return 0;
         }
 
@@ -129,6 +143,7 @@ public:
         }
 
         broker.tick(now);
+        flush_pass();
         return rc;
     }
 
@@ -159,9 +174,21 @@ private:
             if (r < 0 && errno == EINTR) {
                 continue;
             }
-            close_fds();  // EOF or fatal error
+            // EOF or fatal error. The peer may still hold its read end,
+            // so replies queued earlier in this pass go out first.
+            flush();
+            close_fds();
             broker.conn_closed(0);
             return;
+        }
+    }
+
+    // The one write per pass. A ring left non-empty by EAGAIN waits for
+    // POLLOUT instead of being retried blind.
+    void flush_pass() {
+        if (dirty_) {
+            dirty_ = false;
+            flush();
         }
     }
 
@@ -190,12 +217,14 @@ private:
         rfd_ = -1;
         wfd_ = -1;
         ring_.clear();
+        dirty_ = false;
     }
 
     OutRing<OutBufSize> ring_;
     int rfd_ = -1;
     int wfd_ = -1;
     bool started_ = false;
+    bool dirty_ = false;  // gained bytes since the last flush_pass()
     volatile sig_atomic_t running_ = 1;
 };
 
