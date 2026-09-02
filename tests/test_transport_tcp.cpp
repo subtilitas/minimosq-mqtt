@@ -433,14 +433,26 @@ TEST(tcp_signal_interrupted_pass_still_writes) {
 
     // A handler without SA_RESTART makes poll() return EINTR, which is
     // the path a stop() from a signal handler takes.
+    // Process-global state is only touched once its setup succeeded, and
+    // is restored in reverse order; CHECK() does not abort, so the test
+    // returns instead.
     struct sigaction sa {};
     sa.sa_handler = on_alarm;
     sigemptyset(&sa.sa_mask);
     struct sigaction old {};
-    CHECK(::sigaction(SIGALRM, &sa, &old) == 0);
+    const bool handler_installed = ::sigaction(SIGALRM, &sa, &old) == 0;
+    CHECK(handler_installed);
+    if (!handler_installed) {
+        return;
+    }
     itimerval arm{};
     arm.it_value.tv_usec = 20000;  // 20 ms, well inside the 2 s poll
-    CHECK(::setitimer(ITIMER_REAL, &arm, nullptr) == 0);
+    const bool timer_armed = ::setitimer(ITIMER_REAL, &arm, nullptr) == 0;
+    CHECK(timer_armed);
+    if (!timer_armed) {
+        ::sigaction(SIGALRM, &old, nullptr);
+        return;
+    }
 
     b.from_tick = wire::bs("tick");
     const int rc = t.poll_once(b, 2000);
@@ -453,5 +465,43 @@ TEST(tcp_signal_interrupted_pass_still_writes) {
     CHECK_EQ(b.sends_ok, 1);
     receive(t, b, c, 4);
     CHECK_EQ(c.rx_len, size_t{4});
+    c.close();
+}
+
+TEST(tcp_span_that_still_does_not_fit_after_a_write_is_refused) {
+    using Small = TcpTransport<1, 256>;
+    Small t;
+    Scripted<Small> b{t};
+    CHECK(t.open(0, "127.0.0.1"));
+
+    // A peer that never reads, with the smallest buffers the kernel allows
+    // on both ends, so the socket fills within one conn_data().
+    Client c;
+    c.fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(c.fd >= 0);
+    int small = 1;
+    CHECK(::setsockopt(c.fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof small) == 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(t.port());
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    CHECK(::connect(c.fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) == 0);
+    CHECK(set_nonblocking(c.fd));
+    for (int i = 0; i < 20 && t.native_handle(0) < 0; ++i) {
+        t.poll_once(b, 5);
+    }
+    CHECK(t.native_handle(0) >= 0);
+    CHECK(::setsockopt(t.native_handle(0), SOL_SOCKET, SO_SNDBUF, &small, sizeof small) == 0);
+
+    uint8_t chunk[100];
+    std::memset(chunk, 0x55, sizeof chunk);
+    b.reply = ByteSpan{chunk, sizeof chunk};
+    b.replies = 2000;  // 200 KB at a peer that takes a few KB and stops
+    c.send_pkt(wire::make_pingreq());
+    t.poll_once(b, 50);
+    CHECK(b.sends_ok > 0);      // the ring was written and reused first
+    CHECK(b.sends_failed > 0);  // then refused: this is the slow-consumer signal
+    t.close(0);
+    CHECK_EQ(t.native_handle(0), -1);
     c.close();
 }

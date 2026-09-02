@@ -92,9 +92,10 @@ written at the end of the poll pass, after `tick()`, so everything a pass
 produced for a connection — acknowledgements, deliveries, whatever the
 timeouts decided — leaves in one `send()` syscall. A ring that fills
 mid-pass is written and the append retried once; `send()` returns `false`
-only when the ring is full and the kernel takes nothing, which is the
-slow-consumer condition the broker drops on. The pass that reads a peer's
-EOF, and a pass cut short by `EINTR`, still write what they produced.
+when the span still does not fit after that write — the ring is full and
+the kernel accepted too little of it — and the broker drops the connection
+as a slow consumer. The pass that reads a peer's EOF, and a pass cut short
+by `EINTR`, still write what they produced.
 
 `TcpTransport` sets `TCP_NODELAY` on every accepted socket. With the
 transport coalescing its own writes, Nagle's algorithm has nothing left to

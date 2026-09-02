@@ -10,9 +10,8 @@
 // a poll pass is written once at the end of that pass, after
 // broker.tick(), so a pass costs one send() per connection rather than
 // one per packet. A ring that fills mid-pass is written and the append
-// retried once; a connection whose ring is full while the kernel takes
-// nothing is a slow consumer and gets dropped by the broker (send()
-// returns false).
+// retried once; a span that still does not fit is refused (send()
+// returns false) and the broker drops the connection as a slow consumer.
 //
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_TRANSPORTS_POSIX_STREAM_SERVER_HPP
@@ -88,9 +87,9 @@ public:
         }
         if (!s.ring.append(bytes)) {
             // The ring is full mid-pass. Write what is already in it and try
-            // once more: only a peer that cannot take the bytes at all is a
-            // slow consumer, and deferring the write must not turn a merely
-            // busy connection into one.
+            // once more, so that deferring the write does not turn a merely
+            // busy connection into a slow consumer. A span that still does
+            // not fit -- the kernel took too little -- is refused.
             flush(ci);
             if (!s.ring.append(bytes)) {
                 return false;  // slow consumer: broker will drop this connection

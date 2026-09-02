@@ -78,11 +78,16 @@ inline int run_all() {
 
 }  // namespace minitest
 
+// The body has external linkage on purpose: a static function reached
+// only through the Registrar's pointer reads as dead code to a
+// whole-program analysis (CodeQL's unused-static-function), and every
+// helper it calls then reads as dead with it. One test binary per file
+// keeps the names from ever clashing.
 #define TEST(name)                                                                                 \
-    static void minitest_fn_##name();                                                              \
+    void minitest_fn_##name();                                                                     \
     static minitest::Case minitest_case_##name{#name, &minitest_fn_##name, nullptr};               \
     static minitest::Registrar minitest_reg_##name{&minitest_case_##name};                         \
-    static void minitest_fn_##name()
+    void minitest_fn_##name()
 
 #define CHECK(expr)                                                                                \
     do {                                                                                           \
