@@ -85,13 +85,54 @@ running, which is what drives the keep-alive and handshake timeouts.
 Whatever is left stays readable and the next `poll()` picks it up. A
 transport you write yourself wants the same bound.
 
+### One write per connection per pass
+
+`send()` appends to the connection's output ring and returns. The ring is
+written at the end of the poll pass, after `tick()`, so everything a pass
+produced for a connection — acknowledgements, deliveries, whatever the
+timeouts decided — leaves in one `send()` syscall. A ring that fills
+mid-pass is written and the append retried once; `send()` returns `false`
+only when the ring is full and the kernel takes nothing, which is the
+slow-consumer condition the broker drops on. The pass that reads a peer's
+EOF, and a pass cut short by `EINTR`, still write what they produced.
+
+`TcpTransport` sets `TCP_NODELAY` on every accepted socket. With the
+transport coalescing its own writes, Nagle's algorithm has nothing left to
+merge and would only hold a finished write until the peer's ACK arrives.
+The two go together: batching without `TCP_NODELAY` leaves saturated
+QoS 0 throughput where it was, and `TCP_NODELAY` without batching turns
+every packet into a segment.
+
+Measured with 8 clients, 64-byte payloads, each message published and
+received by the same client, loopback, a 65536-byte ring and the broker
+on one core:
+
+| | per-packet write | batched + `TCP_NODELAY` |
+| --- | ---: | ---: |
+| TCP, QoS 0, saturated | 227 156 msg/s | 975 660 msg/s |
+| TCP, QoS 1, saturated | 138 068 msg/s | 380 640 msg/s |
+| unix socket, QoS 0, saturated | 316 809 msg/s | 1 251 644 msg/s |
+| TCP, QoS 0, 1000 msg/s per client, median round trip | 1020 us | 59 us |
+| TCP, QoS 1, 1000 msg/s per client, median round trip | 56 us | 89 us |
+
+The QoS 1 median rises because a reply now waits for the end of the pass
+instead of leaving at once; the pass grows with load, up to
+`max_reads_per_pass` reads of 2048 bytes per busy connection, so a quiet
+connection's reply can wait behind its neighbours' work. With the
+default 4096-byte ring, saturated TCP QoS 0 measures 771 404 msg/s. A
+real network, a real NIC and lwIP are not measured.
+
+`Broker::publish()` called from outside `poll_once()` queues the same
+way: the bytes leave at the end of the next pass, which `poll()` enters
+immediately because the ring is non-empty.
+
 ## Bundled transports
 
 All POSIX-only, and all examples rather than core:
 
 | Header | What it is |
 | --- | --- |
-| `transports/posix/tcp.hpp` | TCP server; works on lwIP targets (ESP-IDF, Zephyr) too |
+| `transports/posix/tcp.hpp` | TCP server, `TCP_NODELAY` on accepted sockets; works on lwIP targets (ESP-IDF, Zephyr) too |
 | `transports/posix/unix_socket.hpp` | Unix domain socket server, for local-only brokers |
 | `transports/posix/pipe.hpp` | One connection over any pair of stream descriptors — pipes, FIFOs, a socketpair, a child process's stdio |
 | `transports/posix/stream_server.hpp` | The shared nonblocking `poll()` loop behind the TCP and unix-socket transports |
@@ -139,10 +180,11 @@ contract, so it is the best template. The shape is always:
 3. On readable: `conn_data(slot, bytes, now)`, for a bounded number of
    reads — see above; whatever is left waits for the next pass.
 4. On EOF or error: free the slot, call `conn_closed(slot)`.
-5. In `send()`: append to that slot's output buffer, try to flush, and
-   return `false` if the buffer overflowed.
+5. In `send()`: append to that slot's output buffer; if it is full,
+   write it out and retry once; return `false` only if it is still full.
 6. In `close()`: flush what you can, free the slot, and do not call back.
-7. Call `tick(now)` once per loop iteration.
+7. Call `tick(now)` once per loop iteration, then write every buffer that
+   gained bytes during the iteration — one write per connection.
 
 Buffering matters: `send()` must accept the entire span, so each
 connection needs an output buffer sized for the largest burst you expect

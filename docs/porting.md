@@ -112,6 +112,11 @@ Points specific to the ESP32 worth getting right:
   static, so it does not count.
 * **No `SIGPIPE`.** ESP-IDF has no signals to ignore, and the transport
   falls back to plain `send()` where `MSG_NOSIGNAL` is not defined.
+* **`TCP_NODELAY`.** `TcpTransport` sets it on every accepted socket;
+  lwIP supports the option through `<sys/socket.h>`, and
+  `<netinet/tcp.h>` is included only where `__has_include` finds it.
+  The transport writes each connection once per poll pass, so the
+  option costs no extra segments (see [Transports](transports.md)).
 * **Not available on lwIP:** the unix-socket and pipe transports. Only
   include `transports/posix/tcp.hpp`.
 * **Exceptions.** IDF disables C++ exceptions by default, which suits
