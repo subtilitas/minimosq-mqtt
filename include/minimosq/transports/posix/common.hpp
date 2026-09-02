@@ -13,8 +13,16 @@
 
 #include <fcntl.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+// TCP_NODELAY lives here on hosted systems; lwIP defines it through
+// <sys/socket.h> and may not ship this header at all.
+#if defined(__has_include)
+#if __has_include(<netinet/tcp.h>)
+#include <netinet/tcp.h>
+#endif
+#endif
 
 #include "../../core/span.hpp"
 
@@ -29,10 +37,11 @@ inline uint32_t posix_now_ms() noexcept {
                                  static_cast<uint64_t>(ts.tv_nsec) / 1000000u);
 }
 
-// Disable Nagle's algorithm on a stream socket. The transport coalesces its
-// own writes (one flush per poll pass), so leaving Nagle to do it would only
-// add a round trip's wait to a packet that is already complete. Silently does
-// nothing on a socket that has no such option -- a unix socket, for one.
+// Disable Nagle's algorithm on a TCP socket. The transports coalesce
+// their own writes (one per connection per poll pass), so Nagle would
+// only add a round trip's wait to a write that is already complete.
+// Compiles to nothing where the option is not defined; the return value
+// is ignored because there is nothing useful to do with a refusal.
 inline void set_nodelay(int fd) noexcept {
 #if defined(TCP_NODELAY)
     const int one = 1;

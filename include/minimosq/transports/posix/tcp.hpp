@@ -53,6 +53,9 @@ public:
             return false;
         }
         this->listen_fd_ = fd;
+        // Accepted sockets are TCP: turn Nagle off on each, since the
+        // base class already writes each connection once per poll pass.
+        this->tcp_nodelay_ = true;
         return true;
     }
 

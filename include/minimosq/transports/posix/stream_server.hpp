@@ -4,8 +4,15 @@
 // a unix-domain-socket MQTT server, so both (tcp.hpp, unix_socket.hpp)
 // derive from this class and just provide open(). Everything here is
 // nonblocking; each connection owns a fixed output ring for bytes the
-// peer has not accepted yet. A connection that overflows its ring is a
-// slow consumer and gets dropped by the broker (send() returns false).
+// peer has not accepted yet.
+//
+// Write policy: send() only appends. Every ring that gained bytes during
+// a poll pass is written once at the end of that pass, after
+// broker.tick(), so a pass costs one send() per connection rather than
+// one per packet. A ring that fills mid-pass is written and the append
+// retried once; a connection whose ring is full while the kernel takes
+// nothing is a slow consumer and gets dropped by the broker (send()
+// returns false).
 //
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_TRANSPORTS_POSIX_STREAM_SERVER_HPP
@@ -69,6 +76,8 @@ public:
 
     // ------------------------------------ transport policy (broker-facing)
 
+    // Queue bytes; they leave at the end of the current poll pass, or at
+    // the end of the next one when called from outside poll_once().
     bool send(size_t ci, ByteSpan bytes) {
         if (ci >= MaxConns) {
             return false;  // mis-sized transport; see the static_assert in Broker
@@ -87,6 +96,7 @@ public:
                 return false;  // slow consumer: broker will drop this connection
             }
         }
+        s.dirty = true;
         return true;
     }
 
@@ -102,12 +112,19 @@ public:
         ::close(s.fd);
         s.fd = -1;
         s.ring.clear();
+        s.dirty = false;
     }
+
+    // The descriptor behind a connection index, or -1 when the slot is
+    // free. For peer-address lookups and socket options; the transport
+    // keeps ownership.
+    int native_handle(size_t ci) const noexcept { return ci < MaxConns ? slots_[ci].fd : -1; }
 
     // ------------------------------------------------- event loop driving
 
     // One poll iteration. Returns the number of fds with events, 0 on
-    // timeout/EINTR. Always calls broker.tick() once.
+    // timeout/EINTR. Always calls broker.tick() once, then writes every
+    // ring that gained bytes during the pass.
     template <typename B>
     int poll_once(B& broker, int timeout_ms) {
         pollfd pfds[MaxConns + 1];
@@ -140,8 +157,11 @@ public:
         const int rc = ::poll(pfds, n, timeout_ms);
         const uint32_t now = posix_now_ms();
         if (rc < 0) {
+            // EINTR and friends: still run the tick, and still write what
+            // it produced — a stop() from a signal handler lands here.
             broker.tick(now);
-            return 0;  // EINTR and friends: just run the tick
+            flush_all();
+            return 0;
         }
 
         for (nfds_t i = 0; i < n; ++i) {
@@ -166,13 +186,7 @@ public:
         }
 
         broker.tick(now);
-
-        // Everything this pass produced -- acknowledgements, deliveries, and
-        // whatever tick() decided -- goes to the wire here, in one write per
-        // connection instead of one per packet. That is the coalescing Nagle
-        // used to do for us, which is what makes TCP_NODELAY affordable.
         flush_all();
-
         return rc;
     }
 
@@ -192,9 +206,14 @@ public:
 protected:
     int listen_fd_ = -1;
 
+    // Set by a derived class whose accepted sockets are TCP; the option
+    // does not exist on other socket families.
+    bool tcp_nodelay_ = false;
+
 private:
     struct Slot {
         int fd = -1;
+        bool dirty = false;  // gained bytes since the last flush_all()
         OutRing<OutBufSize> ring;
     };
 
@@ -224,9 +243,12 @@ private:
                 ::close(fd);  // no free slot: refuse at the socket level
                 continue;
             }
-            set_nodelay(fd);
+            if (tcp_nodelay_) {
+                set_nodelay(fd);
+            }
             slots_[ci].fd = fd;
             slots_[ci].ring.clear();
+            slots_[ci].dirty = false;
             if (broker.conn_open(ci, now) != Err::ok) {
                 ::close(fd);
                 slots_[ci].fd = -1;
@@ -251,18 +273,27 @@ private:
             if (r < 0 && errno == EINTR) {
                 continue;
             }
-            // EOF or fatal error: the peer is gone.
+            // EOF or fatal error: the peer is gone. A peer that only shut
+            // its write side may still read, so replies queued earlier in
+            // this pass are written first, best effort.
+            flush(ci);
             ::close(slots_[ci].fd);
             slots_[ci].fd = -1;
             slots_[ci].ring.clear();
+            slots_[ci].dirty = false;
             broker.conn_closed(ci);
             return;
         }
     }
 
+    // One write per connection that gained bytes this pass. A ring left
+    // non-empty by EAGAIN is not retried here: poll() reports POLLOUT for
+    // it, and the next pass writes it then.
     void flush_all() {
         for (size_t ci = 0; ci < MaxConns; ++ci) {
-            if (slots_[ci].fd >= 0 && !slots_[ci].ring.empty()) {
+            Slot& s = slots_[ci];
+            if (s.fd >= 0 && s.dirty) {
+                s.dirty = false;
                 flush(ci);
             }
         }
