@@ -9,6 +9,7 @@
 
 #include <csignal>
 #include <cstring>
+#include <sys/time.h>
 #include <unistd.h>
 
 using namespace minimosq;
@@ -216,6 +217,8 @@ size_t receive(T& t, B& b, int fd, uint8_t* buf, size_t want) {
     return got;
 }
 
+void on_alarm(int) {}
+
 }  // namespace
 
 TEST(pipe_output_from_tick_leaves_in_the_same_pass) {
@@ -286,5 +289,65 @@ TEST(pipe_reply_reaches_a_peer_that_closed_its_write_end) {
     uint8_t buf[8];
     CHECK_EQ(receive(t, b, pp.b2c[0], buf, 4), size_t{4});
     CHECK(std::memcmp(buf, "pong", 4) == 0);
+    ::close(pp.b2c[0]);
+}
+
+TEST(pipe_span_that_still_does_not_fit_after_a_write_is_refused) {
+    std::signal(SIGPIPE, SIG_IGN);
+    using Small = PipeTransport<256>;
+    PipePair pp;
+    CHECK(pp.make());
+    Small t;
+    Scripted<Small> b{t};
+    CHECK(t.open(pp.c2b[0], pp.b2c[1]));
+    t.poll_once(b, 5);
+
+    // Nobody reads b2c: the pipe takes its capacity (64 KiB by default),
+    // then every write is EAGAIN and the ring cannot be emptied.
+    uint8_t chunk[100];
+    std::memset(chunk, 0x55, sizeof chunk);
+    b.reply = ByteSpan{chunk, sizeof chunk};
+    b.replies = 2000;  // 200 KB
+    send_all(pp.c2b[1], wire::make_pingreq().span());
+    t.poll_once(b, 50);
+    CHECK(b.sends_ok > 0);
+    CHECK(b.sends_failed > 0);
+    t.close(0);
+    CHECK(t.closed());
+    ::close(pp.c2b[1]);
+    ::close(pp.b2c[0]);
+}
+
+TEST(pipe_signal_interrupted_pass_still_writes) {
+    std::signal(SIGPIPE, SIG_IGN);
+    PipePair pp;
+    CHECK(pp.make());
+    set_nonblocking(pp.b2c[0]);
+    Transport t;
+    Scripted<Transport> b{t};
+    CHECK(t.open(pp.c2b[0], pp.b2c[1]));
+    t.poll_once(b, 5);
+
+    struct sigaction sa {};
+    sa.sa_handler = on_alarm;
+    sigemptyset(&sa.sa_mask);
+    struct sigaction old {};
+    CHECK(::sigaction(SIGALRM, &sa, &old) == 0);
+    itimerval arm{};
+    arm.it_value.tv_usec = 20000;  // 20 ms, well inside the 2 s poll
+    CHECK(::setitimer(ITIMER_REAL, &arm, nullptr) == 0);
+
+    b.from_tick = wire::bs("tick");
+    const int rc = t.poll_once(b, 2000);
+
+    const itimerval off{};
+    ::setitimer(ITIMER_REAL, &off, nullptr);
+    ::sigaction(SIGALRM, &old, nullptr);
+
+    CHECK_EQ(rc, 0);
+    CHECK_EQ(b.sends_ok, 1);
+    uint8_t buf[8];
+    CHECK_EQ(receive(t, b, pp.b2c[0], buf, 4), size_t{4});
+    ::close(pp.c2b[1]);
     ::close(pp.b2c[0]);
 }

@@ -455,3 +455,41 @@ TEST(tcp_signal_interrupted_pass_still_writes) {
     CHECK_EQ(c.rx_len, size_t{4});
     c.close();
 }
+
+TEST(tcp_span_that_still_does_not_fit_after_a_write_is_refused) {
+    using Small = TcpTransport<1, 256>;
+    Small t;
+    Scripted<Small> b{t};
+    CHECK(t.open(0, "127.0.0.1"));
+
+    // A peer that never reads, with the smallest buffers the kernel allows
+    // on both ends, so the socket fills within one conn_data().
+    Client c;
+    c.fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(c.fd >= 0);
+    int small = 1;
+    CHECK(::setsockopt(c.fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof small) == 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(t.port());
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    CHECK(::connect(c.fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) == 0);
+    CHECK(set_nonblocking(c.fd));
+    for (int i = 0; i < 20 && t.native_handle(0) < 0; ++i) {
+        t.poll_once(b, 5);
+    }
+    CHECK(t.native_handle(0) >= 0);
+    CHECK(::setsockopt(t.native_handle(0), SOL_SOCKET, SO_SNDBUF, &small, sizeof small) == 0);
+
+    uint8_t chunk[100];
+    std::memset(chunk, 0x55, sizeof chunk);
+    b.reply = ByteSpan{chunk, sizeof chunk};
+    b.replies = 2000;  // 200 KB at a peer that takes a few KB and stops
+    c.send_pkt(wire::make_pingreq());
+    t.poll_once(b, 50);
+    CHECK(b.sends_ok > 0);      // the ring was written and reused first
+    CHECK(b.sends_failed > 0);  // then refused: this is the slow-consumer signal
+    t.close(0);
+    CHECK_EQ(t.native_handle(0), -1);
+    c.close();
+}
