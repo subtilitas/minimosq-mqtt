@@ -78,9 +78,15 @@ public:
             return false;
         }
         if (!s.ring.append(bytes)) {
-            return false;  // slow consumer: broker will drop this connection
+            // The ring is full mid-pass. Write what is already in it and try
+            // once more: only a peer that cannot take the bytes at all is a
+            // slow consumer, and deferring the write must not turn a merely
+            // busy connection into one.
+            flush(ci);
+            if (!s.ring.append(bytes)) {
+                return false;  // slow consumer: broker will drop this connection
+            }
         }
-        flush(ci);  // opportunistic immediate write
         return true;
     }
 
@@ -160,6 +166,13 @@ public:
         }
 
         broker.tick(now);
+
+        // Everything this pass produced -- acknowledgements, deliveries, and
+        // whatever tick() decided -- goes to the wire here, in one write per
+        // connection instead of one per packet. That is the coalescing Nagle
+        // used to do for us, which is what makes TCP_NODELAY affordable.
+        flush_all();
+
         return rc;
     }
 
@@ -211,6 +224,7 @@ private:
                 ::close(fd);  // no free slot: refuse at the socket level
                 continue;
             }
+            set_nodelay(fd);
             slots_[ci].fd = fd;
             slots_[ci].ring.clear();
             if (broker.conn_open(ci, now) != Err::ok) {
@@ -243,6 +257,14 @@ private:
             slots_[ci].ring.clear();
             broker.conn_closed(ci);
             return;
+        }
+    }
+
+    void flush_all() {
+        for (size_t ci = 0; ci < MaxConns; ++ci) {
+            if (slots_[ci].fd >= 0 && !slots_[ci].ring.empty()) {
+                flush(ci);
+            }
         }
     }
 

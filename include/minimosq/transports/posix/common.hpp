@@ -12,6 +12,8 @@
 #include <ctime>
 
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 
 #include "../../core/span.hpp"
@@ -25,6 +27,19 @@ inline uint32_t posix_now_ms() noexcept {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint32_t>(static_cast<uint64_t>(ts.tv_sec) * 1000u +
                                  static_cast<uint64_t>(ts.tv_nsec) / 1000000u);
+}
+
+// Disable Nagle's algorithm on a stream socket. The transport coalesces its
+// own writes (one flush per poll pass), so leaving Nagle to do it would only
+// add a round trip's wait to a packet that is already complete. Silently does
+// nothing on a socket that has no such option -- a unix socket, for one.
+inline void set_nodelay(int fd) noexcept {
+#if defined(TCP_NODELAY)
+    const int one = 1;
+    (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+#else
+    (void)fd;
+#endif
 }
 
 inline bool set_nonblocking(int fd) noexcept {
