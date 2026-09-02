@@ -328,14 +328,26 @@ TEST(pipe_signal_interrupted_pass_still_writes) {
     CHECK(t.open(pp.c2b[0], pp.b2c[1]));
     t.poll_once(b, 5);
 
+    // Process-global state is only touched once its setup succeeded, and
+    // is restored in reverse order; CHECK() does not abort, so the test
+    // returns instead.
     struct sigaction sa {};
     sa.sa_handler = on_alarm;
     sigemptyset(&sa.sa_mask);
     struct sigaction old {};
-    CHECK(::sigaction(SIGALRM, &sa, &old) == 0);
+    const bool handler_installed = ::sigaction(SIGALRM, &sa, &old) == 0;
+    CHECK(handler_installed);
+    if (!handler_installed) {
+        return;
+    }
     itimerval arm{};
     arm.it_value.tv_usec = 20000;  // 20 ms, well inside the 2 s poll
-    CHECK(::setitimer(ITIMER_REAL, &arm, nullptr) == 0);
+    const bool timer_armed = ::setitimer(ITIMER_REAL, &arm, nullptr) == 0;
+    CHECK(timer_armed);
+    if (!timer_armed) {
+        ::sigaction(SIGALRM, &old, nullptr);
+        return;
+    }
 
     b.from_tick = wire::bs("tick");
     const int rc = t.poll_once(b, 2000);
