@@ -10,8 +10,11 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <csignal>
+#include <cstring>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 using namespace minimosq;
@@ -74,7 +77,7 @@ struct Client {
 
     // Read whatever is available right now.
     void drain() {
-        while (true) {
+        while (rx_len < sizeof rx) {
             const ssize_t r = ::read(fd, rx + rx_len, sizeof rx - rx_len);
             if (r <= 0) {
                 return;
@@ -278,4 +281,177 @@ TEST(tcp_transport_publishes_its_outbound_capacity) {
     static_assert(minimosq::transport_out_buf_size<Unbuffered>::value == 0,
                   "a transport that does not say is left alone");
     CHECK_EQ(minimosq::transport_out_buf_size<Unbuffered>::value, size_t{0});
+}
+
+// ------------------------------------------------------- write policy
+//
+// send() appends; every ring that gained bytes is written once at the end
+// of the poll pass, after tick(). These pin that, since the pub/sub tests
+// above pass just as well with a per-packet write.
+
+namespace {
+
+// Stands in for the broker so a test decides what the transport is asked
+// to send and when: replies from conn_data(), a message from tick().
+template <typename T>
+struct Scripted {
+    T& t;
+    ByteSpan reply{};  // sent `replies` times from every conn_data()
+    int replies = 1;
+    ByteSpan from_tick{};  // sent once, from the next tick()
+    int sends_ok = 0;
+    int sends_failed = 0;
+    int closed = 0;
+
+    explicit Scripted(T& transport) : t(transport) {}
+    Err conn_open(size_t, uint32_t) { return Err::ok; }
+    Err conn_data(size_t ci, ByteSpan, uint32_t) {
+        for (int i = 0; i < replies; ++i) {
+            (t.send(ci, reply) ? sends_ok : sends_failed)++;
+        }
+        return Err::ok;
+    }
+    void conn_closed(size_t) { ++closed; }
+    void tick(uint32_t) {
+        if (!from_tick.empty()) {
+            (t.send(0, from_tick) ? sends_ok : sends_failed)++;
+            from_tick = ByteSpan{};
+        }
+    }
+};
+
+// Connect a client and pump until the transport holds its socket in slot 0.
+template <typename T, typename B>
+bool accept_one(T& t, B& b, Client& c) {
+    if (!c.connect_to(t.port())) {
+        return false;
+    }
+    for (int i = 0; i < 20 && t.native_handle(0) < 0; ++i) {
+        t.poll_once(b, 5);
+    }
+    return t.native_handle(0) >= 0;
+}
+
+// Drain until the client holds `want` bytes, pumping the loop in between so
+// a ring left over by EAGAIN gets its POLLOUT pass.
+template <typename T, typename B>
+void receive(T& t, B& b, Client& c, size_t want) {
+    for (int i = 0; i < 50 && c.rx_len < want; ++i) {
+        c.drain();
+        if (c.rx_len < want) {
+            t.poll_once(b, 5);
+        }
+    }
+}
+
+void on_alarm(int) {}
+
+}  // namespace
+
+TEST(tcp_accepted_sockets_have_nodelay) {
+    TcpTransport<2> t;
+    Scripted<TcpTransport<2>> b{t};
+    CHECK(t.open(0, "127.0.0.1"));
+    Client c;
+    CHECK(accept_one(t, b, c));
+    CHECK_EQ(t.native_handle(1), -1);
+    CHECK_EQ(t.native_handle(2), -1);  // out of range reads as free
+
+    int on = 0;
+    socklen_t len = sizeof on;
+    CHECK(::getsockopt(t.native_handle(0), IPPROTO_TCP, TCP_NODELAY, &on, &len) == 0);
+    CHECK(on != 0);
+    c.close();
+}
+
+TEST(tcp_output_from_tick_leaves_in_the_same_pass) {
+    TcpTransport<2> t;
+    Scripted<TcpTransport<2>> b{t};
+    CHECK(t.open(0, "127.0.0.1"));
+    Client c;
+    CHECK(accept_one(t, b, c));
+
+    b.from_tick = wire::bs("tick");
+    t.poll_once(b, 5);  // nothing readable: times out, ticks, must still write
+    CHECK_EQ(b.sends_ok, 1);
+    receive(t, b, c, 4);
+    CHECK_EQ(c.rx_len, size_t{4});
+    CHECK(std::memcmp(c.rx, "tick", 4) == 0);
+    c.close();
+}
+
+TEST(tcp_pass_larger_than_the_ring_is_written_not_dropped) {
+    using Small = TcpTransport<1, 256>;
+    Small t;
+    Scripted<Small> b{t};
+    CHECK(t.open(0, "127.0.0.1"));
+    Client c;
+    CHECK(accept_one(t, b, c));
+
+    uint8_t chunk[100];
+    std::memset(chunk, 0x55, sizeof chunk);
+    b.reply = ByteSpan{chunk, sizeof chunk};
+    b.replies = 8;  // 800 bytes into a 256-byte ring from one conn_data()
+    c.send_pkt(wire::make_pingreq());
+    t.poll_once(b, 50);
+    CHECK_EQ(b.sends_ok, 8);
+    CHECK_EQ(b.sends_failed, 0);  // a busy connection is not a slow consumer
+    CHECK(t.native_handle(0) >= 0);
+    receive(t, b, c, 800);
+    CHECK_EQ(c.rx_len, size_t{800});
+    c.close();
+}
+
+TEST(tcp_reply_reaches_a_peer_that_half_closed) {
+    TcpTransport<2> t;
+    Scripted<TcpTransport<2>> b{t};
+    CHECK(t.open(0, "127.0.0.1"));
+    Client c;
+    CHECK(accept_one(t, b, c));
+
+    b.reply = wire::bs("pong");
+    c.send_pkt(wire::make_pingreq());
+    CHECK(::shutdown(c.fd, SHUT_WR) == 0);  // data, then EOF, in one pass
+    for (int i = 0; i < 20 && b.closed == 0; ++i) {
+        t.poll_once(b, 5);
+    }
+    CHECK_EQ(b.closed, 1);
+    CHECK_EQ(b.sends_ok, 1);
+    CHECK_EQ(t.native_handle(0), -1);
+    receive(t, b, c, 4);
+    CHECK_EQ(c.rx_len, size_t{4});
+    CHECK(std::memcmp(c.rx, "pong", 4) == 0);
+    c.close();
+}
+
+TEST(tcp_signal_interrupted_pass_still_writes) {
+    TcpTransport<2> t;
+    Scripted<TcpTransport<2>> b{t};
+    CHECK(t.open(0, "127.0.0.1"));
+    Client c;
+    CHECK(accept_one(t, b, c));
+
+    // A handler without SA_RESTART makes poll() return EINTR, which is
+    // the path a stop() from a signal handler takes.
+    struct sigaction sa {};
+    sa.sa_handler = on_alarm;
+    sigemptyset(&sa.sa_mask);
+    struct sigaction old {};
+    CHECK(::sigaction(SIGALRM, &sa, &old) == 0);
+    itimerval arm{};
+    arm.it_value.tv_usec = 20000;  // 20 ms, well inside the 2 s poll
+    CHECK(::setitimer(ITIMER_REAL, &arm, nullptr) == 0);
+
+    b.from_tick = wire::bs("tick");
+    const int rc = t.poll_once(b, 2000);
+
+    const itimerval off{};
+    ::setitimer(ITIMER_REAL, &off, nullptr);
+    ::sigaction(SIGALRM, &old, nullptr);
+
+    CHECK_EQ(rc, 0);
+    CHECK_EQ(b.sends_ok, 1);
+    receive(t, b, c, 4);
+    CHECK_EQ(c.rx_len, size_t{4});
+    c.close();
 }
