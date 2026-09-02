@@ -99,6 +99,16 @@ public:
     // Published so Broker can static_assert against Traits.
     static constexpr size_t max_connections = MaxConns;
 
+    // send() encrypts a whole packet into cipher_, so BufSize bounds the
+    // largest packet that can pass through the adapter at all. Published
+    // for the same reason as max_connections: BufSize is declared here
+    // and max_packet_size in Traits, and nothing else makes them agree.
+    //
+    // Necessary, not sufficient: ciphertext is larger than plaintext by
+    // the record overhead, and the raw transport underneath has a buffer
+    // of its own. Both can still refuse a packet this check allows.
+    static constexpr size_t out_buf_size = BufSize;
+
     explicit TlsAdapter(RawTransport& raw) noexcept : raw_(raw) {}
 
     Engine* engine(size_t ci) noexcept { return ci < MaxConns ? &engines_[ci] : nullptr; }

@@ -139,6 +139,18 @@ struct transport_max_connections<T, decltype((void)T::max_connections)> {
     static constexpr size_t value = T::max_connections;
 };
 
+// Likewise for the outbound buffer: a transport that publishes its
+// capacity lets the broker check that a whole packet fits, and one that
+// does not (or that does not buffer at all) is left alone.
+template <typename T, typename = void>
+struct transport_out_buf_size {
+    static constexpr size_t value = 0;
+};
+template <typename T>
+struct transport_out_buf_size<T, decltype((void)T::out_buf_size)> {
+    static constexpr size_t value = T::out_buf_size;
+};
+
 template <typename Traits, typename Transport, typename Security = AllowAllSecurity,
           typename Observer = NullObserver>
 class Broker {
@@ -149,6 +161,18 @@ class Broker {
                       transport_max_connections<Transport>::value >= Traits::max_connections,
                   "Transport has fewer connection slots than Traits::max_connections; "
                   "size the transport with Traits::max_connections");
+
+    // An outbound buffer smaller than one packet cannot fail
+    // transiently: send() appends the packet whole, so a packet larger
+    // than the buffer is refused every time, for every peer, forever.
+    // The transport reports that as a full buffer, which the broker
+    // reads as a slow consumer and answers by dropping the connection —
+    // so a misconfiguration here surfaces as an innocent subscriber
+    // being disconnected, a long way from the two numbers that disagree.
+    static_assert(transport_out_buf_size<Transport>::value == 0 ||
+                      transport_out_buf_size<Transport>::value >= Traits::max_packet_size,
+                  "Transport's outbound buffer is smaller than Traits::max_packet_size; "
+                  "size the transport's OutBufSize with Traits::max_packet_size");
 
 public:
     static constexpr size_t max_connections = Traits::max_connections;

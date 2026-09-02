@@ -251,3 +251,31 @@ TEST(tcp_bind_address_is_honoured) {
     CHECK(!bad.open(0, "not-an-address"));  // never silently falls back to ANY
     CHECK_EQ(bad.port(), 0);
 }
+
+// ------------------------------------------------- sizes the broker checks
+
+// OutBufSize is declared on the transport and max_packet_size in Traits, with
+// nothing tying them together: a ring smaller than one packet cannot fail
+// transiently, because send() appends the packet whole and would refuse it
+// every time. Broker static_asserts the two agree, which only works while the
+// transport keeps publishing its capacity.
+TEST(tcp_transport_publishes_its_outbound_capacity) {
+    using Small = minimosq::TcpTransport<4, 2048>;
+    static_assert(Small::out_buf_size == 2048,
+                  "the transport must publish OutBufSize for Broker to check it");
+    static_assert(minimosq::transport_out_buf_size<Small>::value == 2048,
+                  "and the detection trait must see it");
+    CHECK_EQ(Small::out_buf_size, size_t{2048});
+    CHECK_EQ(minimosq::transport_out_buf_size<Small>::value, size_t{2048});
+
+    // A transport that publishes nothing opts out rather than failing to
+    // compile, which is what keeps the check from breaking a third-party
+    // transport that does not buffer at all.
+    struct Unbuffered {
+        bool send(size_t, minimosq::ByteSpan) { return true; }
+        void close(size_t) {}
+    };
+    static_assert(minimosq::transport_out_buf_size<Unbuffered>::value == 0,
+                  "a transport that does not say is left alone");
+    CHECK_EQ(minimosq::transport_out_buf_size<Unbuffered>::value, size_t{0});
+}
