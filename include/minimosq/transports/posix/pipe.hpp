@@ -82,7 +82,7 @@ public:
         }
         if (!ring_.append(bytes)) {
             // Full mid-pass: write it out and retry once, as the stream
-            // transport does. Only a peer that takes nothing is slow.
+            // transport does. A span that still does not fit is refused.
             flush();
             if (!ring_.append(bytes)) {
                 return false;
