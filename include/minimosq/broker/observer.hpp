@@ -88,6 +88,7 @@ enum class EventKind : uint8_t {
     retained_store_failed,  // topic — store full, or too large to own
     retained_stale_purged,  // topic — an unstorable update evicted the old value
     delivery_dropped,       // client_id, topic, qos, err (oversize | capacity)
+    inbound_qos2_evicted,   // ci, client_id — tracking table full, oldest id forgotten
 };
 
 inline const char* event_kind_name(EventKind k) noexcept {
@@ -118,6 +119,8 @@ inline const char* event_kind_name(EventKind k) noexcept {
         return "session_expired";
     case EventKind::session_evicted:
         return "session_evicted";
+    case EventKind::inbound_qos2_evicted:
+        return "inbound_qos2_evicted";
     case EventKind::publish_denied:
         return "publish_denied";
     case EventKind::subscribe_denied:

@@ -1067,12 +1067,21 @@ private:
         if (p.qos == QoS::exactly_once) {
             if (s.has_inbound_qos2(p.packet_id)) {
                 deliver = false;  // redelivery of an unreleased id: already routed
-            } else if (s.inbound_qos2.full()) {
-                // Documented capacity policy: we cannot track another id
-                // without risking duplicate delivery, so drop the client.
-                violation(ci, Err::capacity);
-                return;
             } else {
+                if (s.inbound_qos2.full()) {
+                    // Tracking another id means forgetting one. Dropping
+                    // the client instead was unrecoverable for a
+                    // persistent session: the table survives the
+                    // disconnect, so every reconnect died on its first
+                    // QoS 2 publish and session_expiry_ms defaults to
+                    // never. The cost is that the forgotten id is no
+                    // longer deduplicated — exactly-once degrades to
+                    // at-least-once for it, under a condition the client
+                    // created by leaving max_inbound_qos2 publishes
+                    // unreleased.
+                    notify_conn(EventKind::inbound_qos2_evicted, ci);
+                    s.inbound_qos2.remove_ordered(0);  // the oldest
+                }
                 s.inbound_qos2.push_back(p.packet_id);
             }
         }

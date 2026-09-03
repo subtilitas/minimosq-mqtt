@@ -58,6 +58,13 @@ struct DefaultTraits {
     // Inbound QoS 2 PUBLISH ids being tracked for exactly-once
     // delivery (between PUBLISH and PUBREL). Size to the peak number of
     // unacknowledged QoS 2 publishes a client may have in flight.
+    //
+    // A client that exceeds it has the oldest tracked id forgotten,
+    // reported as inbound_qos2_evicted. That id alone loses its
+    // duplicate suppression: a redelivery of it is routed a second time.
+    // The connection is kept, because the table outlives a disconnect —
+    // dropping the client left a persistent session that no reconnect
+    // could recover.
     static constexpr size_t max_inbound_qos2 = 8;
 
     // A connection must complete its CONNECT handshake within this

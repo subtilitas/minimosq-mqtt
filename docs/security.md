@@ -169,7 +169,8 @@ These are always on, and tuned through the traits:
 | `max_topic_len` | A PUBLISH or will topic too long to store is refused outright, rather than reaching QoS 0 subscribers and silently skipping QoS>0 ones |
 | `session_expiry_ms` | Discards persistent sessions whose client never came back; see below |
 | Session eviction | A full session pool releases the longest-disconnected session rather than refuse a new client |
-| `max_sessions`, `max_retained`, `max_pending_per_session`, `max_inbound_qos2` | Fixed tables; a full table is refused cleanly (see the policy table in [Design notes](design.md)) |
+| `max_sessions`, `max_retained`, `max_pending_per_session` | Fixed tables; a full table is refused cleanly (see the policy table in [Design notes](design.md)) |
+| `max_inbound_qos2` | Fixed table; a full table forgets its oldest tracked packet id, reported as `inbound_qos2_evicted`. That id loses duplicate suppression; the connection and session are kept |
 
 Because nothing is allocated at runtime, there is no fragmentation and no
 out-of-memory path: the worst case is a refused connection or a dropped
