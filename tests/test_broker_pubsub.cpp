@@ -385,3 +385,40 @@ TEST(retained_replay_pauses_instead_of_dropping_the_subscriber) {
     CHECK_EQ(t.packets, before + 1 + 3);  // SUBACK + all three retained
     CHECK_EQ(t.closed, 0);                // and never dropped as a slow consumer
 }
+
+// The queue flush is the same shape: up to max_pending_per_session
+// packets back to back. A refusal leaves the message queued with its
+// in-flight state uncommitted, and tick() pumps the rest.
+TEST(queued_delivery_pauses_and_resumes_instead_of_dropping) {
+    using Tr = BudgetTransport<SmallTraits::max_connections, 280>;
+    Tr t;
+    minimosq::Broker<SmallTraits, Tr> b{t};
+
+    uint8_t payload[SmallTraits::max_payload_len];
+    for (size_t i = 0; i < sizeof payload; ++i) {
+        payload[i] = static_cast<uint8_t>('a' + (i % 26));
+    }
+
+    b.conn_open(0, 1000);
+    b.conn_data(0, wire::make_connect("sub").span(), 1000);
+    b.conn_data(0, wire::make_subscribe(1, {{"a/#", 1}}).span(), 1000);
+    t.drain();  // CONNACK and SUBACK are away
+    const size_t before = t.packets;
+
+    // Three QoS 1 publishes of 99 wire bytes each against a 280-byte
+    // budget: the third cannot be taken.
+    const char* topic = "a/bbbbbbbb/cccccccc/dddddddd";
+    for (int i = 0; i < 3; ++i) {
+        CHECK(b.publish(minimosq::StrView{topic}, minimosq::ByteSpan{payload, sizeof payload},
+                        minimosq::QoS::at_least_once, /*retain=*/false) == minimosq::Err::ok);
+    }
+    CHECK_EQ(t.packets, before + 2);  // two out, the third refused
+    CHECK_EQ(t.closed, 0);            // and the subscriber kept
+
+    // The refused message is still queued, not committed to in-flight,
+    // so the next pass sends it.
+    t.drain();
+    b.tick(1100);
+    CHECK_EQ(t.packets, before + 3);
+    CHECK_EQ(t.closed, 0);
+}

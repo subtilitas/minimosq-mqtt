@@ -284,9 +284,13 @@ public:
         // pass continues here, so the burst is paced by the transport
         // rather than costing the subscriber its connection.
         sessions_.for_each([&](SessionT& s) {
-            if (s.connected() && !conns_[s.conn].dead && any_retain_pending(s)) {
+            if (!s.connected() || conns_[s.conn].dead) {
+                return;
+            }
+            if (any_retain_pending(s)) {
                 replay_retained(s.conn, s);
             }
+            pump_session(s);  // and a queue flush the ring refused
         });
         flush_dead();
         expire_sessions(now_ms);
@@ -713,25 +717,39 @@ private:
 
     // Send every not-yet-sent queued entry of a connected session.
     void pump_session(SessionT& s) {
-        for (size_t i = 0; i < s.pending.size(); ++i) {
+        size_t i = 0;
+        while (i < s.pending.size()) {
             if (conns_[s.conn].dead) {
                 return;
             }
             typename SessionT::OutMsg& m = s.pending[i];
+            // A PUBREL the transport refused is outstanding work too:
+            // nothing else retransmits one between reconnects, so the
+            // QoS 2 flow would otherwise never complete.
+            if (m.state == OutState::awaiting_pubcomp && m.resend_pubrel) {
+                if (!try_send_to(s.conn, build_packet_id_only(out_, sizeof out_, PacketType::pubrel,
+                                                              m.packet_id))) {
+                    return;  // still no room; the flag keeps it outstanding
+                }
+                m.resend_pubrel = false;
+                ++i;
+                continue;
+            }
             if (m.state != OutState::queued) {
+                ++i;
                 continue;
             }
             const uint16_t id = s.alloc_packet_id();
             const ByteSpan pkt = build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
                                                m.qos, m.retain, m.dup, id);
             if (pkt.empty()) {
+                // Cannot be built at all: report it rather than lose it
+                // silently. Ordered, because the queue is delivered in
+                // order [MQTT-4.6]; the shift puts the next entry in
+                // this slot, so i does not advance.
                 notify_drop(s, m.topic.view(), m.qos, Err::oversize);
-                // Ordered, because the queue is delivered in order
-                // [MQTT-4.6]. The decrement re-examines the slot the
-                // shift just filled; at i == 0 it wraps and the loop's
-                // ++i brings it back to 0, which is the same slot.
-                s.pending.remove_ordered(i--);
-                continue;  // cannot be built: report it rather than lose it silently
+                s.pending.remove_ordered(i);
+                continue;
             }
             // The queue can be wider than the outbound ring: a resumed
             // session flushes up to max_pending_per_session packets back
@@ -744,6 +762,7 @@ private:
             m.packet_id = id;
             m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
                                                     : OutState::awaiting_pubrec;
+            ++i;
         }
     }
 
@@ -751,7 +770,8 @@ private:
     // messages with DUP=1 and unacknowledged PUBRELs, then flush the
     // offline queue — in original order [MQTT-4.4.0-1, MQTT-4.6].
     void resume_session(SessionT& s) {
-        for (size_t i = 0; i < s.pending.size(); ++i) {
+        size_t i = 0;
+        while (i < s.pending.size()) {
             if (conns_[s.conn].dead) {
                 return;
             }
@@ -759,8 +779,11 @@ private:
             if (m.state == OutState::awaiting_pubcomp) {
                 if (!try_send_to(s.conn, build_packet_id_only(out_, sizeof out_, PacketType::pubrel,
                                                               m.packet_id))) {
-                    return;  // paced: tick() pumps the rest
+                    m.resend_pubrel = true;  // pump_session carries it on
+                    return;
                 }
+                m.resend_pubrel = false;
+                ++i;
                 continue;
             }
             // A queued message is being sent for the first time; one
@@ -772,7 +795,7 @@ private:
                                                m.qos, m.retain, dup, id);
             if (pkt.empty()) {
                 notify_drop(s, m.topic.view(), m.qos, Err::oversize);
-                s.pending.remove_ordered(i--);
+                s.pending.remove_ordered(i);  // next entry lands in this slot
                 continue;
             }
             // This burst is as wide as the queue, so a refusal is the
@@ -787,6 +810,7 @@ private:
             } else {
                 m.dup = true;
             }
+            ++i;
         }
     }
 
