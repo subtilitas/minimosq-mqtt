@@ -176,3 +176,41 @@ TEST(table_acl_scans_every_user_regardless_of_match) {
     const ByteSpan bpw = StrView("b").bytes();
     CHECK(acl.authenticate("cid", &first, &bpw, ctx) == ConnackCode::bad_credentials);
 }
+
+// The password comparison was constant time and the username comparison
+// was not, so how far a guess matched a stored name was observable in the
+// time one authenticate() call took — the enumeration oracle the scan is
+// written to close. Timing is not testable here; what is testable is that
+// the constant-time comparison decides names exactly as an equality
+// comparison would, including the prefix cases that motivated the change.
+TEST(table_acl_matches_usernames_exactly) {
+    TableAcl<4, 8> acl;
+    CHECK(acl.add_user("sensor-1", "secret", 1));
+
+    TableAcl<4, 8>::Context ctx{};
+    const ByteSpan pw = StrView("secret").bytes();
+
+    const StrView exact = "sensor-1";
+    CHECK(acl.authenticate("cid", &exact, &pw, ctx) == ConnackCode::accepted);
+
+    // A prefix of a stored name shares every byte it has, which is
+    // exactly what a constant-time compare must not accept.
+    const StrView prefix = "sensor-";
+    CHECK(acl.authenticate("cid", &prefix, &pw, ctx) == ConnackCode::bad_credentials);
+    const StrView shorter = "s";
+    CHECK(acl.authenticate("cid", &shorter, &pw, ctx) == ConnackCode::bad_credentials);
+
+    // A stored name that is a prefix of the guess.
+    const StrView longer = "sensor-11";
+    CHECK(acl.authenticate("cid", &longer, &pw, ctx) == ConnackCode::bad_credentials);
+
+    // Same length, differing in the last byte and in the first.
+    const StrView last = "sensor-2";
+    CHECK(acl.authenticate("cid", &last, &pw, ctx) == ConnackCode::bad_credentials);
+    const StrView first = "Sensor-1";
+    CHECK(acl.authenticate("cid", &first, &pw, ctx) == ConnackCode::bad_credentials);
+
+    // An empty username is not a match for a non-empty stored one.
+    const StrView empty = StrView{"", 0};
+    CHECK(acl.authenticate("cid", &empty, &pw, ctx) == ConnackCode::bad_credentials);
+}
