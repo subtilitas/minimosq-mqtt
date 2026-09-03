@@ -60,7 +60,9 @@ struct DefaultTraits {
     // unacknowledged QoS 2 publishes a client may have in flight.
     static constexpr size_t max_inbound_qos2 = 8;
 
-    // A connection must complete its CONNECT handshake within this time.
+    // A connection must complete its CONNECT handshake within this
+    // time. 0 disables it, as with the two windows below — a connection
+    // that never sends CONNECT is then held until the peer drops it.
     static constexpr uint32_t connect_timeout_ms = 10000;
 
     // Reclaim connections from clients that connected with keep-alive 0
@@ -73,6 +75,12 @@ struct DefaultTraits {
     // an attacker needs. The member is optional: traits that omit it
     // behave as if it were 0.
     static constexpr uint32_t max_idle_ms = 0;
+
+    // Every duration above is bounded by 2^31 - 1 ms (24 days 20 hours).
+    // The deadline comparison tolerates the clock wrapping by comparing
+    // signed differences, which leaves it half the uint32_t range; a
+    // longer interval reads as already passed and fires at once. Broker
+    // static_asserts each one.
 
     // Discard a disconnected persistent (clean-session=0) session after
     // this long without a connection. 0 disables it, which is the letter

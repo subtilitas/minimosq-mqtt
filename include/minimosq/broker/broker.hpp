@@ -149,6 +149,25 @@ public:
         (Traits::max_packet_size > stored_body_max ? Traits::max_packet_size : stored_body_max);
 
 private:
+    // deadline_passed() compares by signed difference so the clock may
+    // wrap, which leaves it half the uint32_t range to work in: an
+    // interval of 2^31 ms or more is already "passed" the moment it is
+    // set, so the timeout fires immediately instead of never. Nothing
+    // about a uint32_t trait says so, and 2^31 ms is 24 days 20 hours —
+    // a plausible thing to write for a session expiry.
+    static constexpr uint32_t max_duration_ms = 0x7FFFFFFFu;
+    static_assert(Traits::connect_timeout_ms <= max_duration_ms,
+                  "Traits::connect_timeout_ms exceeds 2^31-1 ms (24d 20h); the deadline "
+                  "comparison would treat it as already passed and time out at once");
+    // These two are optional traits, so they are read through their
+    // detection templates rather than off Traits directly.
+    static_assert(traits_max_idle_ms<Traits>::value <= max_duration_ms,
+                  "Traits::max_idle_ms exceeds 2^31-1 ms (24d 20h); the deadline "
+                  "comparison would treat it as already passed and reclaim at once");
+    static_assert(traits_session_expiry_ms<Traits>::value <= max_duration_ms,
+                  "Traits::session_expiry_ms exceeds 2^31-1 ms (24d 20h); the deadline "
+                  "comparison would treat it as already passed and expire at once");
+
     // A transport with fewer slots than the broker hands out indices for
     // is an out-of-bounds write waiting to happen, and nothing about the
     // two declarations forces them to agree — so check it here.
@@ -245,7 +264,11 @@ public:
             if (!c.active || c.dead) {
                 continue;
             }
-            const bool armed = (c.session == no_session) || c.keepalive_s > 0 || max_idle_ms > 0;
+            // Each of the three windows is disabled by 0, so a
+            // connection with no session is only on the clock when
+            // connect_timeout_ms asks for one.
+            const bool armed = (c.session == no_session) ? Traits::connect_timeout_ms > 0
+                                                         : (c.keepalive_s > 0 || max_idle_ms > 0);
             if (armed && deadline_passed(now_ms, c.deadline_ms)) {
                 if (c.session == no_session) {
                     notify_conn(EventKind::connect_timeout, i);
@@ -437,6 +460,10 @@ private:
         }
     }
 
+    // Wrap-tolerant: the clock is allowed to roll over, so the two are
+    // compared by signed difference rather than by magnitude. That works
+    // while the interval stays under half the range — see the
+    // static_assert on the duration traits.
     static bool deadline_passed(uint32_t now, uint32_t deadline) noexcept {
         return static_cast<int32_t>(now - deadline) >= 0;
     }
