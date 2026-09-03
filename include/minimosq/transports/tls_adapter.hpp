@@ -50,6 +50,7 @@
 
 #include "../core/error.hpp"
 #include "../core/span.hpp"
+#include "../transport.hpp"
 
 namespace minimosq {
 
@@ -97,26 +98,35 @@ template <typename Engine, typename RawTransport, size_t MaxConns, size_t BufSiz
 class TlsAdapter {
 public:
     // Published so Broker can static_assert against Traits.
-    static constexpr size_t max_connections = MaxConns;
+    // The broker checks its Traits against whatever a transport
+    // publishes, and this adapter is what it sees. Publishing MaxConns
+    // alone would hide a raw transport with fewer slots: the broker
+    // would hand out an index the raw transport refuses, and
+    // StreamServerTransport answers Err::state by closing the fresh
+    // socket. The narrower of the two is the real capacity.
+    static constexpr size_t max_connections =
+        narrower_capacity(MaxConns, transport_max_connections<RawTransport>::value);
 
     // send() encrypts a whole packet into cipher_, so BufSize bounds the
-    // largest packet that can pass through the adapter at all. Published
-    // for the same reason as max_connections: BufSize is declared here
-    // and max_packet_size in Traits, and nothing else makes them agree.
+    // largest packet that can pass through the adapter — and then the
+    // ciphertext goes to the raw transport's buffer, which bounds it
+    // again. Publishing BufSize alone would have the broker check this
+    // adapter's scratch buffer and never the ring the bytes land in.
     //
-    // Necessary, not sufficient: ciphertext is larger than plaintext by
-    // the record overhead, and the raw transport underneath has a buffer
-    // of its own. Both can still refuse a packet this check allows.
-    static constexpr size_t out_buf_size = BufSize;
+    // Still necessary rather than sufficient: ciphertext is larger than
+    // plaintext by the record overhead, which neither number accounts
+    // for, so a packet this check allows can still be refused.
+    static constexpr size_t out_buf_size =
+        narrower_capacity(BufSize, transport_out_buf_size<RawTransport>::value);
 
     explicit TlsAdapter(RawTransport& raw) noexcept : raw_(raw) {}
 
-    Engine* engine(size_t ci) noexcept { return ci < MaxConns ? &engines_[ci] : nullptr; }
+    Engine* engine(size_t ci) noexcept { return ci < max_connections ? &engines_[ci] : nullptr; }
 
     // ------------------------- transport policy (the broker calls this)
 
     bool send(size_t ci, ByteSpan plaintext) {
-        if (ci >= MaxConns) {
+        if (ci >= max_connections) {
             return false;
         }
         size_t cipher_len = 0;
@@ -127,7 +137,7 @@ public:
     }
 
     void close(size_t ci) {
-        if (ci < MaxConns) {
+        if (ci < max_connections) {
             raw_.close(ci);
         }
     }
@@ -146,7 +156,7 @@ public:
         B& broker;
 
         Err conn_open(size_t ci, uint32_t now_ms) {
-            if (ci >= MaxConns) {
+            if (ci >= max_connections) {
                 return Err::state;
             }
             tls.engines_[ci].reset();
@@ -154,13 +164,13 @@ public:
         }
 
         void conn_closed(size_t ci) {
-            if (ci < MaxConns) {
+            if (ci < max_connections) {
                 broker.conn_closed(ci);
             }
         }
 
         Err conn_data(size_t ci, ByteSpan cipher_in, uint32_t now_ms) {
-            if (ci >= MaxConns) {
+            if (ci >= max_connections) {
                 return Err::state;
             }
             // The record buffers live in the adapter, not on the stack:
@@ -200,7 +210,9 @@ public:
 
 private:
     RawTransport& raw_;
-    Engine engines_[MaxConns];
+    // Sized by the published capacity: an index past it never reaches
+    // the wrapped transport, so an engine for it could never be used.
+    Engine engines_[max_connections];
     // Shared record scratch; see Driver::conn_data. Only ever live for
     // the duration of one call.
     uint8_t plain_[BufSize];
