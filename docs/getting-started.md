@@ -21,7 +21,7 @@ add_subdirectory(third_party/minimosq-mqtt)
 include(FetchContent)
 FetchContent_Declare(minimosq
   GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
-  GIT_TAG v1.0.0-rc1)
+  GIT_TAG v1.0.0-rc1)  # a pre-release; 1.0.0 is not tagged yet
 FetchContent_MakeAvailable(minimosq)
 
 # installed system-wide or into a prefix

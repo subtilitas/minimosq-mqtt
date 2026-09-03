@@ -25,9 +25,11 @@
 #define MINIMOSQ_VERSION_MINOR 0
 #define MINIMOSQ_VERSION_PATCH 0
 
-// One comparable integer, three digits per component: 1.0.0 -> 1000000.
-// Minor and patch are therefore bounded by 999, which is ample and keeps
-// a later version from ever comparing below an earlier one.
+// One comparable integer: major * 1000000 + minor * 1000 + patch, so
+// 1.0.0 -> 1000000. Minor and patch are the two fixed-width fields and
+// are therefore bounded by 999, which is ample and keeps a later version
+// from ever comparing below an earlier one. Major is the top term and is
+// not bounded.
 #define MINIMOSQ_VERSION_NUMBER(major, minor, patch) ((major) * 1000000 + (minor) * 1000 + (patch))
 
 #define MINIMOSQ_VERSION                                                                           \
