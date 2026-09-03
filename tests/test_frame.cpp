@@ -132,3 +132,52 @@ TEST(frame_reset_recovers) {
     CHECK(fp.feed(pkt.span(), sink) == Err::ok);
     CHECK_EQ(sink.count, 1u);
 }
+
+// A stop leaves the parser on a packet boundary, so a caller that keeps
+// feeding — the contract scopes the "undefined state" warning to non-ok
+// results, and a stop returns Err::ok — reads the next packet rather
+// than this one again.
+TEST(frame_stop_after_a_body_does_not_redeliver_it) {
+    FrameParser<512> fp;
+    Sink sink;
+    sink.stop_after = 1;
+
+    const uint8_t payload[] = {'t'};
+    const wire::Pkt pub = wire::make_publish("a", ByteSpan{payload, sizeof payload});
+    CHECK(fp.feed(pub.span(), sink) == Err::ok);
+    CHECK_EQ(sink.count, 1u);
+
+    // Feeding again must not re-fire the completed packet. Without the
+    // fix the parser stayed in State::body with body_len_ == rem_len_,
+    // so the completion branch fired once more per feed — for a QoS 1
+    // PUBLISH, a duplicate delivery to every subscriber.
+    sink.stop_after = 0;
+    const wire::Pkt ping = wire::make_pingreq();
+    CHECK(fp.feed(ping.span(), sink) == Err::ok);
+    CHECK_EQ(sink.count, 2u);  // the PUBLISH once, then the PINGREQ
+    CHECK_EQ(sink.items[1].first_byte, ping.data[0]);
+}
+
+TEST(frame_stop_after_a_zero_length_packet_stays_in_sync) {
+    FrameParser<512> fp;
+    Sink sink;
+    sink.stop_after = 1;
+
+    const wire::Pkt ping = wire::make_pingreq();
+    CHECK(fp.feed(ping.span(), sink) == Err::ok);
+    CHECK_EQ(sink.count, 1u);
+
+    // Without the fix the parser stayed in State::length and swallowed
+    // the next first byte as a length continuation, desynchronising the
+    // stream: two further PINGREQs produced no callbacks at all.
+    sink.stop_after = 0;
+    uint8_t two[8];
+    size_t n = 0;
+    for (int k = 0; k < 2; ++k) {
+        for (size_t i = 0; i < ping.len; ++i) {
+            two[n++] = ping.data[i];
+        }
+    }
+    CHECK(fp.feed(ByteSpan{two, n}, sink) == Err::ok);
+    CHECK_EQ(sink.count, 3u);
+}
