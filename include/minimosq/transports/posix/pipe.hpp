@@ -82,9 +82,7 @@ public:
         }
         rfd_ = read_fd;
         wfd_ = write_fd;
-        started_ = false;
-        ring_.clear();
-        dirty_ = false;
+        started_ = false;  // close_fds() above cleared the ring and dirty_
         return true;
     }
 

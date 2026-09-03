@@ -358,16 +358,32 @@ TEST(pipe_open_owns_the_descriptors_on_every_path) {
     ::close(dead_read);
     ::close(dead_write);
 
-    // The fresh pipe is created while the transport is still alive, so
-    // it can claim the numbers the failed open() was handed. If the
-    // destructor closed them, it closes this pipe.
+    // A live pipe is forced onto exactly the numbers the failed open()
+    // was handed, while the transport is still alive. Relying on the
+    // kernel to hand those numbers back would make the test pass by
+    // luck whenever it chose different ones.
     int fresh[2];
     {
         Transport t;
         CHECK(!t.open(dead_read, dead_write));  // set_nonblocking fails
         CHECK(t.closed());                      // and nothing is retained
-        CHECK(::pipe(fresh) == 0);
-    }  // the destructor runs here
+
+        int tmp[2];
+        CHECK(::pipe(tmp) == 0);
+        CHECK(::dup2(tmp[0], dead_read) == dead_read);
+        CHECK(::dup2(tmp[1], dead_write) == dead_write);
+        // pipe() usually hands back the very numbers just freed, in
+        // which case dup2 was a no-op onto itself and closing tmp would
+        // close the descriptors under test.
+        if (tmp[0] != dead_read) {
+            ::close(tmp[0]);
+        }
+        if (tmp[1] != dead_write) {
+            ::close(tmp[1]);
+        }
+        fresh[0] = dead_read;
+        fresh[1] = dead_write;
+    }  // the destructor runs here, on those exact numbers
 
     const uint8_t byte = 'x';
     CHECK(::write(fresh[1], &byte, 1) == 1);
