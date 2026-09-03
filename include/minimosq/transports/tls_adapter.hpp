@@ -83,9 +83,12 @@ struct engine_has_drain {
     static constexpr bool value = false;
 };
 template <typename E>
-struct engine_has_drain<E, decltype((void)tls_detail::lvalue<E>().drain(
+struct engine_has_drain<E, decltype((void)static_cast<bool>(tls_detail::lvalue<E>().drain(
                                tls_detail::lvalue<uint8_t*>(), tls_detail::lvalue<size_t>(),
-                               tls_detail::lvalue<size_t>()))> {
+                               tls_detail::lvalue<size_t>())))> {
+    // The cast is the point: a drain() returning void matches the shape
+    // but not the contract, and would fail to compile where the adapter
+    // tests the result. It is rejected here instead.
     static constexpr bool value = true;
 };
 
@@ -95,8 +98,10 @@ struct engine_record_overhead {
     static constexpr size_t value = 0;
 };
 template <typename E>
-struct engine_record_overhead<E, decltype((void)E::record_overhead)> {
-    static constexpr size_t value = E::record_overhead;
+struct engine_record_overhead<E, decltype((void)size_t{E::record_overhead})> {
+    // Braced, so a member that is not a non-narrowing size_t constant —
+    // signed, or too wide — is not detected rather than subtracted.
+    static constexpr size_t value = size_t{E::record_overhead};
 };
 
 // Wiring demonstration only: copies bytes through unchanged.

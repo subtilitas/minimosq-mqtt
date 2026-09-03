@@ -288,9 +288,9 @@ TEST(a_buffered_record_is_drained_rather_than_stranded) {
     static_assert(!engine_has_drain<NullTlsEngine>::value,
                   "and an engine that never buffers may omit it");
 
-    using Raw = CaptureTransport<SmallTraits::max_connections>;
-    using Tls = TlsAdapter<BufferingEngine, Raw, SmallTraits::max_connections>;
-    Raw raw;
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<BufferingEngine, RawCapture, SmallTraits::max_connections>;
+    RawCapture raw;
     Tls tls{raw};
     Broker<SmallTraits, Tls> b{tls};
     auto driver = tls.driver(b);
@@ -309,15 +309,15 @@ TEST(a_buffered_record_is_drained_rather_than_stranded) {
 }
 
 TEST(the_published_buffer_size_accounts_for_record_growth) {
-    using Raw = CaptureTransport<SmallTraits::max_connections>;
-    using Tls = TlsAdapter<BufferingEngine, Raw, SmallTraits::max_connections, 1024>;
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<BufferingEngine, RawCapture, SmallTraits::max_connections, 1024>;
     // 1024 of scratch, 8 of which every record spends on framing.
     static_assert(Tls::out_buf_size == 1024 - 8,
                   "the broker must check what a packet may occupy, not the raw scratch");
     CHECK_EQ(Tls::out_buf_size, size_t{1016});
 
     // An engine that declares no overhead publishes the scratch size.
-    using Plain = TlsAdapter<NullTlsEngine, Raw, SmallTraits::max_connections, 1024>;
+    using Plain = TlsAdapter<NullTlsEngine, RawCapture, SmallTraits::max_connections, 1024>;
     static_assert(Plain::out_buf_size == 1024, "nothing to subtract");
     CHECK_EQ(Plain::out_buf_size, size_t{1024});
 }
