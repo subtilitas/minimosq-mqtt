@@ -284,11 +284,16 @@ public:
         // pass continues here, so the burst is paced by the transport
         // rather than costing the subscriber its connection.
         sessions_.for_each([&](SessionT& s) {
-            if (!s.connected() || conns_[s.conn].dead) {
+            // s.conn is a uint16_t whose no_conn sentinel is far above
+            // max_connections, so the range is stated for the reader and
+            // for the optimiser: without it GCC cannot prove the index
+            // and -Warray-bounds rejects the inlined conns_ access.
+            const size_t ci = s.conn;
+            if (!s.connected() || ci >= max_connections || conns_[ci].dead) {
                 return;
             }
             if (any_retain_pending(s)) {
-                replay_retained(s.conn, s);
+                replay_retained(ci, s);
             }
             pump_session(s);  // and a queue flush the ring refused
         });
@@ -378,13 +383,35 @@ private:
         observer_.on_event(e);
     }
 
+    // The connection a session is on, or nullptr when it is offline.
+    // s.conn is a uint16_t whose no_conn sentinel sits far above
+    // max_connections; going through here states that range once, for
+    // the reader and for the optimiser — GCC cannot otherwise prove the
+    // index at -O2 and -Warray-bounds rejects the inlined access.
+    Conn* conn_of_session(const SessionT& s) noexcept {
+        const size_t ci = conn_index(s);
+        return ci < max_connections ? &conns_[ci] : nullptr;
+    }
+
+    // The session's connection index, or max_connections when it has
+    // none. Callers pass this rather than s.conn so the value carries
+    // its range with it.
+    static size_t conn_index(const SessionT& s) noexcept {
+        const size_t ci = s.conn;
+        return (s.connected() && ci < max_connections) ? ci : max_connections;
+    }
+
     // A connection-scoped event; picks up the client id when the
     // connection has got as far as having a session.
     void notify_conn(EventKind kind, size_t ci) {
         Event e{kind};
         e.ci = ci;
-        if (const SessionT* s = session_of(conns_[ci])) {
-            e.client_id = s->client_id.view();
+        // A session that is offline has no connection to name, and
+        // forming conns_[ci] for it would be out of bounds.
+        if (ci < max_connections) {
+            if (const SessionT* s = session_of(conns_[ci])) {
+                e.client_id = s->client_id.view();
+            }
         }
         observer_.on_event(e);
     }
@@ -519,6 +546,9 @@ private:
     // and can pause instead: a burst it chose to emit is not evidence
     // about the peer.
     bool try_send_to(size_t ci, ByteSpan pkt) {
+        if (ci >= max_connections) {
+            return false;  // no connection to send on
+        }
         const Conn& c = conns_[ci];
         if (!c.active || c.dead || pkt.empty()) {
             return false;
@@ -527,6 +557,9 @@ private:
     }
 
     void send_to(size_t ci, ByteSpan pkt) {
+        if (ci >= max_connections) {
+            return;  // no connection to send on
+        }
         Conn& c = conns_[ci];
         if (!c.active || c.dead || pkt.empty()) {
             return;
@@ -686,12 +719,13 @@ private:
                 notify_denied(EventKind::receive_denied, s, topic);
                 return;  // this subscriber is not cleared for the topic
             }
-            const bool online = s.connected() && !conns_[s.conn].dead;
+            const Conn* oc = conn_of_session(s);
+            const bool online = oc != nullptr && !oc->dead;
             const QoS eff = qos_min(qos, granted_max);
             if (eff == QoS::at_most_once) {
                 if (online) {  // QoS 0 is not queued for offline sessions
-                    send_to(s.conn, build_publish(out_, sizeof out_, topic, payload,
-                                                  QoS::at_most_once, false, false, 0));
+                    send_to(conn_index(s), build_publish(out_, sizeof out_, topic, payload,
+                                                         QoS::at_most_once, false, false, 0));
                 }
             } else if (online || !s.clean_session) {
                 enqueue(s, topic, payload, eff, /*retain=*/false);
@@ -725,7 +759,7 @@ private:
         m->payload.assign(payload);
         m->qos = eff;
         m->retain = retain;
-        if (s.connected() && !conns_[s.conn].dead) {
+        if (const Conn* pc = conn_of_session(s); pc != nullptr && !pc->dead) {
             pump_session(s);
         }
     }
@@ -734,7 +768,8 @@ private:
     void pump_session(SessionT& s) {
         size_t i = 0;
         while (i < s.pending.size()) {
-            if (conns_[s.conn].dead) {
+            const Conn* c = conn_of_session(s);
+            if (c == nullptr || c->dead) {
                 return;
             }
             typename SessionT::OutMsg& m = s.pending[i];
@@ -742,8 +777,9 @@ private:
             // nothing else retransmits one between reconnects, so the
             // QoS 2 flow would otherwise never complete.
             if (m.state == OutState::awaiting_pubcomp && m.resend_pubrel) {
-                if (!try_send_to(s.conn, build_packet_id_only(out_, sizeof out_, PacketType::pubrel,
-                                                              m.packet_id))) {
+                if (!try_send_to(
+                        conn_index(s),
+                        build_packet_id_only(out_, sizeof out_, PacketType::pubrel, m.packet_id))) {
                     return;  // still no room; the flag keeps it outstanding
                 }
                 m.resend_pubrel = false;
@@ -771,7 +807,7 @@ private:
             // to back. A refusal there is the broker outrunning its own
             // buffer, so the message stays queued for the next pass and
             // the state is committed only once the packet is away.
-            if (!try_send_to(s.conn, pkt)) {
+            if (!try_send_to(conn_index(s), pkt)) {
                 return;
             }
             m.packet_id = id;
@@ -787,13 +823,15 @@ private:
     void resume_session(SessionT& s) {
         size_t i = 0;
         while (i < s.pending.size()) {
-            if (conns_[s.conn].dead) {
+            const Conn* c = conn_of_session(s);
+            if (c == nullptr || c->dead) {
                 return;
             }
             typename SessionT::OutMsg& m = s.pending[i];
             if (m.state == OutState::awaiting_pubcomp) {
-                if (!try_send_to(s.conn, build_packet_id_only(out_, sizeof out_, PacketType::pubrel,
-                                                              m.packet_id))) {
+                if (!try_send_to(
+                        conn_index(s),
+                        build_packet_id_only(out_, sizeof out_, PacketType::pubrel, m.packet_id))) {
                     m.resend_pubrel = true;  // pump_session carries it on
                     return;
                 }
@@ -815,7 +853,7 @@ private:
             }
             // This burst is as wide as the queue, so a refusal is the
             // broker outrunning the ring rather than a slow peer.
-            if (!try_send_to(s.conn, pkt)) {
+            if (!try_send_to(conn_index(s), pkt)) {
                 return;
             }
             if (first_send) {
