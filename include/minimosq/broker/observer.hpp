@@ -23,8 +23,22 @@
 //
 //   * on_event() is called from inside a broker entry point, on the same
 //     thread, with the broker mid-operation. It must not call back into
-//     the broker (publish(), conn_data(), …) — that would reenter the
-//     shared packet build buffer. Copy what you need and return.
+//     the broker (publish(), conn_data(), …). Copy what you need and
+//     return.
+//
+//     The consequence is worse than a garbled packet. receive_denied and
+//     the delivery drops are raised from inside the loop over sessions
+//     that routes a publish, and that loop holds a reference to the
+//     session it is visiting. A nested publish() runs its own routing
+//     and then the deferred teardown, which can release that very
+//     session — leaving the outer loop reading an object that no longer
+//     exists. connection_closed is raised while its connection is being
+//     torn down, so re-entering with conn_data() for it feeds a parser
+//     mid-teardown.
+//
+//     Republishing an event to an audit topic is the obvious way to hit
+//     this. Queue it and publish from your own loop instead. Nothing
+//     enforces the rule: it is a contract, not a guard.
 //   * Every StrView in an Event borrows broker-owned storage and is
 //     valid only for the duration of the call.
 //   * Events are notifications, not a control point. Nothing the
