@@ -311,13 +311,24 @@ public:
             return Err::oversize;
         }
         // 2-byte topic length prefix, the topic, the packet identifier
-        // that QoS > 0 adds, and the payload.
+        // that QoS > 0 adds, and the payload. Below this the packet
+        // cannot be built for anyone, at any QoS.
         const size_t id_len = (qos == QoS::at_most_once) ? 0u : 2u;
         if (2 + topic.len + id_len + payload.len > out_size - packet_overhead) {
-            return Err::oversize;  // could never be built for any subscriber
+            return Err::oversize;
         }
         Err result = Err::ok;
-        if (retain && !apply_retain(topic, payload, qos)) {
+        // A QoS > 0 delivery is copied into the session's queue, which
+        // bounds the payload by max_payload_len — a tighter bound than
+        // the one above, and the one enqueue() actually applies. Past it
+        // every QoS > 0 subscriber is skipped, so returning Err::ok here
+        // would report a delivery that reached none of them. QoS 0
+        // subscribers still receive it, as pass-through, which is why
+        // this is reported rather than refused.
+        if (qos != QoS::at_most_once && payload.len > Traits::max_payload_len) {
+            result = Err::oversize;
+        }
+        if (retain && !apply_retain(topic, payload, qos) && result == Err::ok) {
             result = Err::capacity;  // delivery still happens below
         }
         route_publish(topic, payload, qos);

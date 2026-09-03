@@ -467,3 +467,36 @@ TEST(refused_pubrel_is_retried_rather_than_stranding_qos2) {
     b.tick(2200);
     CHECK_EQ(t.packets, after_connack + 1);
 }
+
+// publish()'s size guard is out_size - packet_overhead, which is neither
+// the bound enqueue() applies (max_payload_len) nor one any transport
+// must satisfy. Between the two, a QoS > 0 publish was accepted with
+// Err::ok while every QoS > 0 subscriber was skipped — and with the
+// default NullObserver the drop is discarded, so nothing reports it.
+TEST(publish_reports_a_payload_no_queued_subscriber_can_take) {
+    Bed x;
+    connected(x, 0, "q1");
+    x.feed(0, wire::make_subscribe(1, {{"a/#", 1}}));
+    (void)x.t.next(0);  // SUBACK
+    connected(x, 1, "q0");
+    x.feed(1, wire::make_subscribe(1, {{"a/#", 0}}));
+    (void)x.t.next(1);  // SUBACK
+
+    // Over max_payload_len (64) but inside out_size - packet_overhead,
+    // so the outer guard passes and the packet is buildable.
+    uint8_t payload[100];
+    for (size_t i = 0; i < sizeof payload; ++i) {
+        payload[i] = static_cast<uint8_t>('a' + (i % 26));
+    }
+    static_assert(sizeof payload > SmallTraits::max_payload_len, "must exceed owned storage");
+
+    const Err r = x.b.publish("a/x", ByteSpan{payload, sizeof payload}, QoS::at_least_once, false);
+    CHECK(r == Err::oversize);  // not Err::ok: no QoS > 0 subscriber can be given it
+
+    // The QoS 1 subscriber is skipped, and the QoS 0 one still receives
+    // it as pass-through — which is why this is reported, not refused.
+    expect_silence(x.t, 0);
+    CapturedPacket p = x.t.next(1);
+    CHECK(p.ok);
+    CHECK(packet_type(p.first_byte) == PacketType::publish);
+}
