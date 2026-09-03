@@ -11,31 +11,43 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-With CMake, consuming the library from another project is one of:
+With CMake, consume the library one of three ways. Each block below is
+complete on its own; use one.
+
+Vendored in your tree:
 
 ```cmake
-# vendored in your tree
 add_subdirectory(third_party/minimosq-mqtt)
-
-# fetched at configure time
-include(FetchContent)
-FetchContent_Declare(minimosq
-  GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
-  GIT_TAG v0.6.2)  # the current stable release
-FetchContent_MakeAvailable(minimosq)
-
-# installed system-wide or into a prefix
-find_package(minimosq 1.0 REQUIRED)
-
 target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
 
-The pinned tag is 0.6.2, the newest stable release; against that tag the
-request is `find_package(minimosq 0.6 REQUIRED)`. The `1.0` request above
-is for an installed build of this tree, which reports 1.0.0. The
-v1.0.0-rc1 tag exists but has known defects listed on its release page,
-including one that disconnects a subscriber under stock traits; it is not
-a suitable pin.
+Fetched at configure time:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(minimosq
+  GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
+  GIT_TAG v0.6.2)
+FetchContent_MakeAvailable(minimosq)
+target_link_libraries(my_app PRIVATE minimosq::minimosq)
+```
+
+Installed system-wide or into a prefix:
+
+```cmake
+find_package(minimosq 1.0 REQUIRED)
+target_link_libraries(my_app PRIVATE minimosq::minimosq)
+```
+
+The pinned tag is
+[0.6.2](https://github.com/subtilitas/minimosq-mqtt/releases/tag/v0.6.2),
+the newest stable release; against that tag the request is
+`find_package(minimosq 0.6 REQUIRED)`. The `1.0` request is for an
+installed build of this tree, which reports 1.0.0. The
+[v1.0.0-rc1](https://github.com/subtilitas/minimosq-mqtt/releases/tag/v1.0.0-rc1)
+tag exists but has known defects listed on its release page, including
+one that disconnects a subscriber under stock traits; it is not a
+suitable pin.
 
 `minimosq::minimosq` is an INTERFACE target: it contributes the include
 path and a C++17 requirement, nothing else.
