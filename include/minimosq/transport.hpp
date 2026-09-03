@@ -18,6 +18,16 @@
 //       // queue flush on reconnect — a refusal only says the broker
 //       // outran the buffer, so it pauses and resumes on a later pass
 //       // rather than punishing the peer for it.
+//       //
+//       // Do NOT call back into the broker from here, conn_closed()
+//       // included. send() runs inside the loop over sessions that
+//       // routes a publish, and inside the queue flush, both of which
+//       // hold a reference to the session being served; conn_closed()
+//       // runs the deferred teardown, which can release that session
+//       // and leave the caller reading an object that no longer
+//       // exists. A peer detected dead while sending is reported by
+//       // returning false — the broker tears the connection down at
+//       // the end of the pass, which is what that path is for.
 //       bool send(size_t conn, minimosq::ByteSpan bytes);
 //
 //       // Tear a connection down (broker-initiated). Free the slot and
@@ -49,9 +59,11 @@
 //
 //   - A transport that buffers outbound bytes may publish
 //     `static constexpr size_t out_buf_size`. When it does, Broker
-//     static_asserts that it is at least Traits::max_packet_size: a
-//     buffer smaller than one packet can never send that packet, to any
-//     peer, at any speed, so send() would fail forever rather than
+//     static_asserts that it is at least Broker::out_size — the framed
+//     size of the widest packet the broker builds, which is more than
+//     Traits::max_packet_size, that being a bound on an inbound body.
+//     A buffer smaller than one packet can never send that packet, to
+//     any peer, at any speed, so send() would fail forever rather than
 //     transiently.
 //
 // See transports/posix/ for reference implementations (TCP, unix
