@@ -528,3 +528,46 @@ TEST(the_default_observer_changes_nothing) {
     expect_suback(x.t, 0, 1, codes);
     expect_silence(x.t, 0);
 }
+
+// ------------------------------------------------------- traits range
+//
+// deadline_passed() compares signed differences so the clock may wrap,
+// which leaves half the uint32_t range to work in. The duration traits
+// are plain uint32_t and said nothing about that: at 2^31 and above a
+// deadline reads as already passed, so the timeout fires at once instead
+// of never. Broker static_asserts the ceiling; the floor is here.
+
+namespace {
+// connect_timeout_ms = 0 must mean "no handshake deadline", as it does
+// for the two windows documented alongside it.
+struct NoConnectTimeout : SmallTraits {
+    static constexpr uint32_t connect_timeout_ms = 0;
+};
+}  // namespace
+
+TEST(connect_timeout_zero_disables_the_handshake_deadline) {
+    CaptureTransport<SmallTraits::max_connections> t;
+    Broker<NoConnectTimeout, CaptureTransport<SmallTraits::max_connections>> b{t};
+
+    b.conn_open(0, 5000);
+    // With the deadline armed unconditionally, now == deadline == 5000
+    // closed the connection at the same millisecond as the accept.
+    b.tick(5000);
+    CHECK(!t.logs[0].closed);
+    b.tick(100000);
+    CHECK(!t.logs[0].closed);
+
+    // And a client that does connect is still served.
+    b.conn_data(0, wire::make_connect("late").span(), 100000);
+    CHECK(!t.logs[0].closed);
+}
+
+TEST(connect_timeout_still_fires_when_it_is_set) {
+    CaptureTransport<SmallTraits::max_connections> t;
+    Bed x;  // SmallTraits: connect_timeout_ms = 5000
+    x.b.conn_open(0, 1000);
+    x.b.tick(5999);
+    CHECK(!x.t.logs[0].closed);
+    x.b.tick(6000);  // 1000 + 5000
+    CHECK(x.t.logs[0].closed);
+}
