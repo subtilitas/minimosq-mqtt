@@ -358,17 +358,17 @@ TEST(pipe_open_owns_the_descriptors_on_every_path) {
     ::close(dead_read);
     ::close(dead_write);
 
+    // The fresh pipe is created while the transport is still alive, so
+    // it can claim the numbers the failed open() was handed. If the
+    // destructor closed them, it closes this pipe.
+    int fresh[2];
     {
         Transport t;
         CHECK(!t.open(dead_read, dead_write));  // set_nonblocking fails
         CHECK(t.closed());                      // and nothing is retained
-    }  // the destructor must not close those numbers a second time
+        CHECK(::pipe(fresh) == 0);
+    }  // the destructor runs here
 
-    // A number the kernel has since handed out again survives that.
-    int fresh[2];
-    CHECK(::pipe(fresh) == 0);
-    // Still usable: if the destructor above had closed a recycled number,
-    // this write would fail with EBADF.
     const uint8_t byte = 'x';
     CHECK(::write(fresh[1], &byte, 1) == 1);
     uint8_t got = 0;
@@ -377,14 +377,35 @@ TEST(pipe_open_owns_the_descriptors_on_every_path) {
     ::close(fresh[0]);
     ::close(fresh[1]);
 
-    // A negative descriptor is refused, and the valid one is not orphaned.
+    // A negative descriptor is refused, and the valid one it was given is
+    // closed with it. p[1] was never passed in, so the test owns it.
     {
         int p[2];
         CHECK(::pipe(p) == 0);
         Transport t;
         CHECK(!t.open(p[0], -1));
         CHECK(t.closed());
+        ::close(p[1]);
     }
+}
+
+// A failed open() on a transport that already holds a pair leaves it
+// closed, rather than keeping descriptors while reporting failure.
+TEST(pipe_failed_open_releases_the_pair_it_held) {
+    int held[2];
+    CHECK(::pipe(held) == 0);
+
+    Transport t;
+    CHECK(t.open(held[0], held[1]));
+    CHECK(!t.closed());
+
+    CHECK(!t.open(-1, -1));  // refused
+    CHECK(t.closed());       // and the pair it held is gone
+
+    const uint8_t byte = 'z';
+    errno = 0;
+    CHECK(::write(held[1], &byte, 1) < 0);
+    CHECK_EQ(errno, EBADF);
 }
 
 TEST(pipe_second_open_does_not_orphan_the_first_pair) {

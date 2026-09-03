@@ -64,8 +64,10 @@ public:
     // descriptor it has passed here — doing so after a failure would
     // close a number the kernel has since handed to something else.
     //
-    // Calling open() again closes the pair it already holds first.
+    // Calling open() again closes the pair it already holds first, and
+    // a failed open() leaves the transport closed either way.
     bool open(int read_fd, int write_fd) {
+        close_fds();  // whatever happens next, the old pair is not kept
         if (read_fd < 0 || write_fd < 0) {
             close_pair(read_fd, write_fd);
             return false;
@@ -78,7 +80,6 @@ public:
             close_pair(read_fd, write_fd);
             return false;
         }
-        close_fds();  // a second open() must not orphan the first pair
         rfd_ = read_fd;
         wfd_ = write_fd;
         started_ = false;
