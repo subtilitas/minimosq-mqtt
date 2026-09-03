@@ -21,7 +21,7 @@ add_subdirectory(third_party/minimosq-mqtt)
 include(FetchContent)
 FetchContent_Declare(minimosq
   GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
-  GIT_TAG v1.0.0-rc1)  # a pre-release; 1.0.0 is not tagged yet
+  GIT_TAG v0.6.2)  # the current stable release
 FetchContent_MakeAvailable(minimosq)
 
 # installed system-wide or into a prefix
@@ -29,6 +29,13 @@ find_package(minimosq 1.0 REQUIRED)
 
 target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
+
+The pinned tag is 0.6.2, the newest stable release; against that tag the
+request is `find_package(minimosq 0.6 REQUIRED)`. The `1.0` request above
+is for an installed build of this tree, which reports 1.0.0. The
+v1.0.0-rc1 tag exists but has known defects listed on its release page,
+including one that disconnects a subscriber under stock traits; it is not
+a suitable pin.
 
 `minimosq::minimosq` is an INTERFACE target: it contributes the include
 path and a C++17 requirement, nothing else.
