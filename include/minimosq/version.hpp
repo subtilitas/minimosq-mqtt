@@ -28,8 +28,9 @@
 // One comparable integer: major * 1000000 + minor * 1000 + patch, so
 // 1.0.0 -> 1000000. Minor and patch are the two fixed-width fields and
 // are therefore bounded by 999, which is ample and keeps a later version
-// from ever comparing below an earlier one. Major is the top term and is
-// not bounded.
+// from ever comparing below an earlier one. The expression has type int,
+// so with minor and patch at 999 the major is bounded by 2146; 2147
+// overflows.
 #define MINIMOSQ_VERSION_NUMBER(major, minor, patch) ((major) * 1000000 + (minor) * 1000 + (patch))
 
 #define MINIMOSQ_VERSION                                                                           \
