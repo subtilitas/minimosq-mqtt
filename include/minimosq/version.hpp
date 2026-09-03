@@ -11,7 +11,7 @@
 // fails the build if the two disagree.
 //
 //     #include <minimosq/version.hpp>
-//     static_assert(MINIMOSQ_VERSION_AT_LEAST(0, 6, 0), "minimosq too old");
+//     static_assert(MINIMOSQ_VERSION_AT_LEAST(1, 0, 0), "minimosq too old");
 //
 // Macros rather than constants alone, because a version check has to work
 // in the preprocessor; the constexpr values below mirror them for code
@@ -21,13 +21,17 @@
 #ifndef MINIMOSQ_VERSION_HPP
 #define MINIMOSQ_VERSION_HPP
 
-#define MINIMOSQ_VERSION_MAJOR 0
-#define MINIMOSQ_VERSION_MINOR 6
-#define MINIMOSQ_VERSION_PATCH 2
+#define MINIMOSQ_VERSION_MAJOR 1
+#define MINIMOSQ_VERSION_MINOR 0
+#define MINIMOSQ_VERSION_PATCH 0
 
-// One comparable integer, three digits per component: 0.6.2 -> 6002.
-// Minor and patch are therefore bounded by 999, which is ample and keeps
-// a later version from ever comparing below an earlier one.
+// One comparable integer: major * 1000000 + minor * 1000 + patch, so
+// 1.0.0 -> 1000000. Minor and patch are the two fixed-width fields and
+// are therefore bounded by 999, which is ample and keeps a later version
+// from ever comparing below an earlier one. The three macros above are
+// int literals, so in C++ the expression is int: with minor and patch
+// at 999 the major is bounded by 2146, and 2147 overflows. In #if the
+// preprocessor evaluates in intmax_t, where that bound does not bite.
 #define MINIMOSQ_VERSION_NUMBER(major, minor, patch) ((major) * 1000000 + (minor) * 1000 + (patch))
 
 #define MINIMOSQ_VERSION                                                                           \
