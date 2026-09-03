@@ -284,6 +284,47 @@ TEST(tcp_transport_publishes_its_outbound_capacity) {
     CHECK_EQ(minimosq::transport_out_buf_size<Unbuffered>::value, size_t{0});
 }
 
+namespace {
+// design.md advises max_payload_len >= max_packet_size; these traits take
+// that advice, which makes the stored parts wider than max_packet_size.
+struct WideTraits : TinyTraits {
+    static constexpr size_t max_payload_len = TinyTraits::max_packet_size;
+};
+}  // namespace
+
+// The ring must hold what send() is handed, not what the frame parser
+// accepts. max_packet_size bounds an inbound Remaining Length — the body
+// alone — while send() receives the framed packet: fixed header, length
+// varint, body. Packets built from stored parts are not bounded by
+// max_packet_size at all. Broker::out_size is that whole quantity, and
+// the static_assert compares the ring against it.
+TEST(broker_out_size_covers_the_whole_framed_packet) {
+    using Ring = minimosq::TcpTransport<TinyTraits::max_connections, 4096>;
+    using B = minimosq::Broker<TinyTraits, Ring>;
+
+    constexpr size_t stored = 2 + TinyTraits::max_topic_len + 2 + TinyTraits::max_payload_len;
+    constexpr size_t widest =
+        TinyTraits::max_packet_size > stored ? TinyTraits::max_packet_size : stored;
+    static_assert(B::out_size == minimosq::packet_overhead + widest,
+                  "out_size is the framed size of the widest packet the broker builds");
+    // A ring sized to max_packet_size — what the check used to ask for —
+    // is short by the fixed header and cannot hold that packet.
+    static_assert(B::out_size > TinyTraits::max_packet_size,
+                  "max_packet_size alone is not a sufficient ring size");
+    CHECK_EQ(B::out_size, minimosq::packet_overhead + widest);
+
+    // design.md advises max_payload_len >= max_packet_size. That makes
+    // the stored parts the wider of the two, so max_packet_size stops
+    // bounding the packet at all.
+    using W = minimosq::Broker<WideTraits, Ring>;
+    constexpr size_t wide_stored = 2 + WideTraits::max_topic_len + 2 + WideTraits::max_payload_len;
+    static_assert(wide_stored > WideTraits::max_packet_size,
+                  "the stored parts are the wider case here");
+    static_assert(W::out_size == minimosq::packet_overhead + wide_stored,
+                  "so out_size follows the stored parts, not max_packet_size");
+    CHECK_EQ(W::out_size, minimosq::packet_overhead + wide_stored);
+}
+
 // ------------------------------------------------------- write policy
 //
 // send() appends; every ring that gained bytes is written once at the end

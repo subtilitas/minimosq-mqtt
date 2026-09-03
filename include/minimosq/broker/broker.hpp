@@ -154,6 +154,20 @@ struct transport_out_buf_size<T, decltype((void)T::out_buf_size)> {
 template <typename Traits, typename Transport, typename Security = AllowAllSecurity,
           typename Observer = NullObserver>
 class Broker {
+public:
+    // The outgoing packet build buffer must hold either a forwarded
+    // inbound packet (bounded by max_packet_size) or a packet built from
+    // stored parts (topic + payload + packet id). Declared here rather
+    // than with the storage it sizes because the static_assert below
+    // compares against it, and a class-body static_assert only sees what
+    // precedes it.
+    static constexpr size_t stored_body_max =
+        2 + Traits::max_topic_len + 2 + Traits::max_payload_len;
+    static constexpr size_t out_size =
+        packet_overhead +
+        (Traits::max_packet_size > stored_body_max ? Traits::max_packet_size : stored_body_max);
+
+private:
     // A transport with fewer slots than the broker hands out indices for
     // is an out-of-bounds write waiting to happen, and nothing about the
     // two declarations forces them to agree — so check it here.
@@ -169,10 +183,15 @@ class Broker {
     // reads as a slow consumer and answers by dropping the connection —
     // so a misconfiguration here surfaces as an innocent subscriber
     // being disconnected, a long way from the two numbers that disagree.
+    // max_packet_size bounds the Remaining Length of an inbound packet —
+    // the body alone. send() is handed a framed packet: fixed header,
+    // length varint, body. It is also handed packets built from stored
+    // parts, which max_packet_size does not bound at all. out_size is
+    // that whole quantity, so it is what the ring must hold.
     static_assert(transport_out_buf_size<Transport>::value == 0 ||
-                      transport_out_buf_size<Transport>::value >= Traits::max_packet_size,
-                  "Transport's outbound buffer is smaller than Traits::max_packet_size; "
-                  "size the transport's OutBufSize with Traits::max_packet_size");
+                      transport_out_buf_size<Transport>::value >= out_size,
+                  "Transport's outbound buffer is smaller than the largest packet the broker "
+                  "builds; size the transport's OutBufSize with Broker::out_size");
 
 public:
     static constexpr size_t max_connections = Traits::max_connections;
@@ -1241,15 +1260,6 @@ private:
     }
 
     // -------------------------------------------------------- storage
-
-    // The outgoing packet build buffer must hold either a forwarded
-    // inbound packet (bounded by max_packet_size) or a packet built from
-    // stored parts (topic + payload + packet id).
-    static constexpr size_t stored_body_max =
-        2 + Traits::max_topic_len + 2 + Traits::max_payload_len;
-    static constexpr size_t out_size =
-        packet_overhead +
-        (Traits::max_packet_size > stored_body_max ? Traits::max_packet_size : stored_body_max);
 
     Transport& tr_;
     Security security_{};
