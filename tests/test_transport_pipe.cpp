@@ -339,3 +339,67 @@ TEST(pipe_signal_interrupted_pass_still_writes) {
     ::close(pp.c2b[1]);
     ::close(pp.b2c[0]);
 }
+
+// ------------------------------------------------ descriptor ownership
+//
+// open() took ownership before the step that can fail and released
+// nothing when it did, so a caller that cleaned up after a failed open
+// closed descriptors the transport still held and would close again from
+// its destructor. By then the numbers are typically recycled, so the
+// second close lands on an unrelated file.
+
+TEST(pipe_open_owns_the_descriptors_on_every_path) {
+    // A descriptor that is closed already: fcntl() on it fails, which is
+    // the failure open() used to leak through.
+    int c2b[2];
+    CHECK(::pipe(c2b) == 0);
+    const int dead_read = c2b[0];
+    const int dead_write = c2b[1];
+    ::close(dead_read);
+    ::close(dead_write);
+
+    {
+        Transport t;
+        CHECK(!t.open(dead_read, dead_write));  // set_nonblocking fails
+        CHECK(t.closed());                      // and nothing is retained
+    }  // the destructor must not close those numbers a second time
+
+    // A number the kernel has since handed out again survives that.
+    int fresh[2];
+    CHECK(::pipe(fresh) == 0);
+    // Still usable: if the destructor above had closed a recycled number,
+    // this write would fail with EBADF.
+    const uint8_t byte = 'x';
+    CHECK(::write(fresh[1], &byte, 1) == 1);
+    uint8_t got = 0;
+    CHECK(::read(fresh[0], &got, 1) == 1);
+    CHECK_EQ(got, uint8_t{'x'});
+    ::close(fresh[0]);
+    ::close(fresh[1]);
+
+    // A negative descriptor is refused, and the valid one is not orphaned.
+    {
+        int p[2];
+        CHECK(::pipe(p) == 0);
+        Transport t;
+        CHECK(!t.open(p[0], -1));
+        CHECK(t.closed());
+    }
+}
+
+TEST(pipe_second_open_does_not_orphan_the_first_pair) {
+    int first[2];
+    int second[2];
+    CHECK(::pipe(first) == 0);
+    CHECK(::pipe(second) == 0);
+
+    Transport t;
+    CHECK(t.open(first[0], first[1]));
+    CHECK(t.open(second[0], second[1]));  // the first pair is closed here
+
+    // The first pair's write end is closed, so writing to it fails.
+    const uint8_t byte = 'y';
+    errno = 0;
+    CHECK(::write(first[1], &byte, 1) < 0);
+    CHECK_EQ(errno, EBADF);
+}

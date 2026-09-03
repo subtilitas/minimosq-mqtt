@@ -58,17 +58,33 @@ public:
 
     ~PipeTransport() { close_fds(); }
 
-    // Takes ownership of both descriptors.
+    // Takes ownership of both descriptors, on success and on failure
+    // alike: when open() returns false it has closed whatever it was
+    // given, and the transport is left closed. The caller never closes a
+    // descriptor it has passed here — doing so after a failure would
+    // close a number the kernel has since handed to something else.
+    //
+    // Calling open() again closes the pair it already holds first.
     bool open(int read_fd, int write_fd) {
         if (read_fd < 0 || write_fd < 0) {
+            close_pair(read_fd, write_fd);
             return false;
         }
+        // Both, not the first that succeeds: a short-circuit would leave
+        // the write end blocking after the read end failed.
+        const bool read_ok = set_nonblocking(read_fd);
+        const bool write_ok = set_nonblocking(write_fd);
+        if (!read_ok || !write_ok) {
+            close_pair(read_fd, write_fd);
+            return false;
+        }
+        close_fds();  // a second open() must not orphan the first pair
         rfd_ = read_fd;
         wfd_ = write_fd;
         started_ = false;
         ring_.clear();
         dirty_ = false;
-        return set_nonblocking(rfd_) && set_nonblocking(wfd_);
+        return true;
     }
 
     bool closed() const noexcept { return rfd_ < 0; }
@@ -207,13 +223,19 @@ private:
         }
     }
 
+    // One descriptor may be both ends (a caller can pass the same fd
+    // twice), so the second close is guarded against closing it again.
+    static void close_pair(int a, int b) noexcept {
+        if (a >= 0) {
+            ::close(a);
+        }
+        if (b >= 0 && b != a) {
+            ::close(b);
+        }
+    }
+
     void close_fds() noexcept {
-        if (rfd_ >= 0) {
-            ::close(rfd_);
-        }
-        if (wfd_ >= 0 && wfd_ != rfd_) {
-            ::close(wfd_);
-        }
+        close_pair(rfd_, wfd_);
         rfd_ = -1;
         wfd_ = -1;
         ring_.clear();
