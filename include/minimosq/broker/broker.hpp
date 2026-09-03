@@ -23,8 +23,10 @@
 //     connection WITHOUT calling conn_closed(ci) back; conn_closed is
 //     only for closes the broker did not initiate.
 //   - send() must queue the whole span (transports buffer internally);
-//     returning false means the connection is beyond saving (e.g. its
-//     buffer overflowed) and makes the broker drop it.
+//     returning false means the span could not be taken. For traffic the
+//     broker did not generate that is a slow consumer and the connection
+//     is dropped; for a self-generated burst (retained replay, the queue
+//     flush on reconnect) it paces instead. See transport.hpp.
 //   - now_ms is any monotonic millisecond clock; wrap-around is fine.
 //
 // Reentrancy: teardown work (will publishing, transport close) is
@@ -278,6 +280,18 @@ public:
                 c.dead = true;  // abnormal: will fires [MQTT-3.1.2-24]
             }
         }
+        // A retained replay that the outbound ring could not take last
+        // pass continues here, so the burst is paced by the transport
+        // rather than costing the subscriber its connection.
+        sessions_.for_each([&](SessionT& s) {
+            if (!s.connected() || conns_[s.conn].dead) {
+                return;
+            }
+            if (any_retain_pending(s)) {
+                replay_retained(s.conn, s);
+            }
+            pump_session(s);  // and a queue flush the ring refused
+        });
         flush_dead();
         expire_sessions(now_ms);
     }
@@ -483,6 +497,18 @@ private:
 
     SessionT* session_of(const Conn& c) noexcept {
         return c.session != no_session ? sessions_.at(c.session) : nullptr;
+    }
+
+    // Like send_to, but a refusal is reported rather than treated as a
+    // slow consumer. Used where the broker generates the traffic itself
+    // and can pause instead: a burst it chose to emit is not evidence
+    // about the peer.
+    bool try_send_to(size_t ci, ByteSpan pkt) {
+        const Conn& c = conns_[ci];
+        if (!c.active || c.dead || pkt.empty()) {
+            return false;
+        }
+        return tr_.send(ci, pkt);
     }
 
     void send_to(size_t ci, ByteSpan pkt) {
@@ -691,19 +717,52 @@ private:
 
     // Send every not-yet-sent queued entry of a connected session.
     void pump_session(SessionT& s) {
-        for (size_t i = 0; i < s.pending.size(); ++i) {
+        size_t i = 0;
+        while (i < s.pending.size()) {
             if (conns_[s.conn].dead) {
                 return;
             }
             typename SessionT::OutMsg& m = s.pending[i];
-            if (m.state != OutState::queued) {
+            // A PUBREL the transport refused is outstanding work too:
+            // nothing else retransmits one between reconnects, so the
+            // QoS 2 flow would otherwise never complete.
+            if (m.state == OutState::awaiting_pubcomp && m.resend_pubrel) {
+                if (!try_send_to(s.conn, build_packet_id_only(out_, sizeof out_, PacketType::pubrel,
+                                                              m.packet_id))) {
+                    return;  // still no room; the flag keeps it outstanding
+                }
+                m.resend_pubrel = false;
+                ++i;
                 continue;
             }
-            m.packet_id = s.alloc_packet_id();
+            if (m.state != OutState::queued) {
+                ++i;
+                continue;
+            }
+            const uint16_t id = s.alloc_packet_id();
+            const ByteSpan pkt = build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
+                                               m.qos, m.retain, m.dup, id);
+            if (pkt.empty()) {
+                // Cannot be built at all: report it rather than lose it
+                // silently. Ordered, because the queue is delivered in
+                // order [MQTT-4.6]; the shift puts the next entry in
+                // this slot, so i does not advance.
+                notify_drop(s, m.topic.view(), m.qos, Err::oversize);
+                s.pending.remove_ordered(i);
+                continue;
+            }
+            // The queue can be wider than the outbound ring: a resumed
+            // session flushes up to max_pending_per_session packets back
+            // to back. A refusal there is the broker outrunning its own
+            // buffer, so the message stays queued for the next pass and
+            // the state is committed only once the packet is away.
+            if (!try_send_to(s.conn, pkt)) {
+                return;
+            }
+            m.packet_id = id;
             m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
                                                     : OutState::awaiting_pubrec;
-            send_to(s.conn, build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
-                                          m.qos, m.retain, m.dup, m.packet_id));
+            ++i;
         }
     }
 
@@ -711,28 +770,47 @@ private:
     // messages with DUP=1 and unacknowledged PUBRELs, then flush the
     // offline queue — in original order [MQTT-4.4.0-1, MQTT-4.6].
     void resume_session(SessionT& s) {
-        for (size_t i = 0; i < s.pending.size(); ++i) {
+        size_t i = 0;
+        while (i < s.pending.size()) {
             if (conns_[s.conn].dead) {
                 return;
             }
             typename SessionT::OutMsg& m = s.pending[i];
-            switch (m.state) {
-            case OutState::queued:
-                m.packet_id = s.alloc_packet_id();
-                m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
-                                                        : OutState::awaiting_pubrec;
-                break;
-            case OutState::awaiting_puback:
-            case OutState::awaiting_pubrec:
-                m.dup = true;
-                break;
-            case OutState::awaiting_pubcomp:
-                send_to(s.conn,
-                        build_packet_id_only(out_, sizeof out_, PacketType::pubrel, m.packet_id));
+            if (m.state == OutState::awaiting_pubcomp) {
+                if (!try_send_to(s.conn, build_packet_id_only(out_, sizeof out_, PacketType::pubrel,
+                                                              m.packet_id))) {
+                    m.resend_pubrel = true;  // pump_session carries it on
+                    return;
+                }
+                m.resend_pubrel = false;
+                ++i;
                 continue;
             }
-            send_to(s.conn, build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
-                                          m.qos, m.retain, m.dup, m.packet_id));
+            // A queued message is being sent for the first time; one
+            // already in flight is a retransmission and carries DUP.
+            const bool first_send = (m.state == OutState::queued);
+            const uint16_t id = first_send ? s.alloc_packet_id() : m.packet_id;
+            const bool dup = first_send ? m.dup : true;
+            const ByteSpan pkt = build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
+                                               m.qos, m.retain, dup, id);
+            if (pkt.empty()) {
+                notify_drop(s, m.topic.view(), m.qos, Err::oversize);
+                s.pending.remove_ordered(i);  // next entry lands in this slot
+                continue;
+            }
+            // This burst is as wide as the queue, so a refusal is the
+            // broker outrunning the ring rather than a slow peer.
+            if (!try_send_to(s.conn, pkt)) {
+                return;
+            }
+            if (first_send) {
+                m.packet_id = id;
+                m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
+                                                        : OutState::awaiting_pubrec;
+            } else {
+                m.dup = true;
+            }
+            ++i;
         }
     }
 
@@ -1151,33 +1229,73 @@ private:
         // monopolise a poll pass and starve tick(). This form sends at
         // most R, whatever K is.
         if (any_retain_pending(s)) {
-            retained_.for_each([&](typename RetainedStore<Traits>::Entry& e) {
-                bool matched = false;
-                QoS granted_max = QoS::at_most_once;
-                for (const typename SessionT::Subscription& sub : s.subs) {
-                    if (sub.retain_pending && topic_matches(sub.filter.view(), e.topic.view())) {
-                        matched = true;
-                        granted_max = qos_max(granted_max, sub.granted);
-                    }
-                }
-                if (!matched) {
-                    return;
-                }
-                if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
-                    notify_denied(EventKind::receive_denied, s, e.topic.view());
-                    return;
-                }
-                // Retained delivery at min(granted, stored QoS), with the
-                // retain flag set [MQTT-3.3.1-8].
-                const QoS eff = qos_min(granted_max, e.qos);
-                if (eff == QoS::at_most_once) {
-                    send_to(ci, build_publish(out_, sizeof out_, e.topic.view(), e.payload.view(),
-                                              QoS::at_most_once, /*retain=*/true, false, 0));
-                } else {
-                    enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
-                }
-            });
+            // This SUBSCRIBE brings its own grants. A cursor left by a
+            // replay still paused from an earlier one would skip the
+            // entries these grants match, so the walk restarts.
+            s.retain_cursor = 0;
+            replay_retained(ci, s);
         }
+    }
+
+    // Deliver the retained messages the pending grants match.
+    //
+    // The replay can be wider than the transport's outbound buffer: it
+    // emits up to max_retained packets back to back, and nothing ties
+    // that total to the ring. Refusing a packet there says the broker
+    // outran its own buffer, not that the peer is slow — so the replay
+    // pauses, records how far it reached, and resumes from tick(). Only
+    // send_to's ordinary path treats a refusal as a slow consumer.
+    //
+    // The cursor counts entries visited, so a retained message stored or
+    // dropped while a replay is paused can shift the remainder by one
+    // and be skipped or repeated. Retained delivery at QoS 0 is already
+    // best-effort, and Broker::out_size guarantees any single packet
+    // fits an empty ring, so a paused replay always makes progress.
+    void replay_retained(size_t ci, SessionT& s) {
+        uint16_t index = 0;
+        bool paused = false;
+        retained_.for_each([&](typename RetainedStore<Traits>::Entry& e) {
+            const uint16_t here = index++;
+            if (paused || here < s.retain_cursor) {
+                return;
+            }
+            bool matched = false;
+            QoS granted_max = QoS::at_most_once;
+            for (const typename SessionT::Subscription& sub : s.subs) {
+                if (sub.retain_pending && topic_matches(sub.filter.view(), e.topic.view())) {
+                    matched = true;
+                    granted_max = qos_max(granted_max, sub.granted);
+                }
+            }
+            if (!matched) {
+                return;
+            }
+            if (!security_.authorize_receive(s.auth_ctx, e.topic.view())) {
+                notify_denied(EventKind::receive_denied, s, e.topic.view());
+                return;
+            }
+            // Retained delivery at min(granted, stored QoS), with the
+            // retain flag set [MQTT-3.3.1-8].
+            const QoS eff = qos_min(granted_max, e.qos);
+            if (eff != QoS::at_most_once) {
+                enqueue(s, e.topic.view(), e.payload.view(), eff, /*retain=*/true);
+                return;
+            }
+            const ByteSpan pkt = build_publish(out_, sizeof out_, e.topic.view(), e.payload.view(),
+                                               QoS::at_most_once, /*retain=*/true, false, 0);
+            if (pkt.empty()) {
+                notify_drop(s, e.topic.view(), QoS::at_most_once, Err::oversize);
+                return;  // cannot be built at all; skip it rather than stall
+            }
+            if (!try_send_to(ci, pkt)) {
+                s.retain_cursor = here;  // resume at this entry next pass
+                paused = true;
+            }
+        });
+        if (paused) {
+            return;  // retain_pending stays set; tick() comes back
+        }
+        s.retain_cursor = 0;
         for (typename SessionT::Subscription& sub : s.subs) {
             sub.retain_pending = false;
         }

@@ -50,6 +50,10 @@ struct Session {
         OutState state = OutState::queued;
         bool retain = false;  // set only for retained delivery on subscribe
         bool dup = false;     // set when retransmitting after reconnect
+        // A PUBREL the transport refused. Nothing else retransmits one
+        // between reconnects, so without this the session would sit in
+        // awaiting_pubcomp and the QoS 2 flow would never complete.
+        bool resend_pubrel = false;
     };
 
     static constexpr uint16_t no_conn = 0xFFFF;
@@ -75,6 +79,13 @@ struct Session {
     bool will_retain = false;
     bool has_will = false;
 
+    // How many retained entries the in-progress replay has already
+    // visited. Non-zero only while a replay is paused because the
+    // transport could not take the next packet; see replay_retained().
+    uint16_t retain_cursor = 0;
+    static_assert(Traits::max_retained <= 0xFFFF,
+                  "retain_cursor is uint16_t; a larger retained store would wrap it and "
+                  "skip or repeat entries during a paused replay");
     bool clean_session = true;
     uint16_t conn = no_conn;  // connection index while connected
 
