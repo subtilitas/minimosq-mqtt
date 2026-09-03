@@ -1,5 +1,6 @@
 // Test-only fixtures for driving the broker: a capturing transport, a
-// small traits configuration, and packet-expectation helpers.
+// small traits configuration, packet-expectation helpers, and a
+// scripted broker stand-in for the transport tests.
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_TESTS_BROKER_UTIL_HPP
 #define MINIMOSQ_TESTS_BROKER_UTIL_HPP
@@ -89,6 +90,37 @@ struct CaptureTransport {
     }
 
     bool no_more(size_t ci) const { return logs[ci].rpos == logs[ci].len; }
+};
+
+// Stands in for the broker so a transport test decides what the transport
+// is asked to send and when: `reply` goes out `replies` times from every
+// conn_data(), `from_tick` once from the next tick(). The counters let a
+// test assert the transport's write policy.
+template <typename T>
+struct Scripted {
+    T& t;
+    ByteSpan reply{};  // sent `replies` times from every conn_data()
+    int replies = 1;
+    ByteSpan from_tick{};  // sent once, from the next tick()
+    int sends_ok = 0;
+    int sends_failed = 0;
+    int closed = 0;
+
+    explicit Scripted(T& transport) : t(transport) {}
+    Err conn_open(size_t, uint32_t) { return Err::ok; }
+    Err conn_data(size_t ci, ByteSpan, uint32_t) {
+        for (int i = 0; i < replies; ++i) {
+            (t.send(ci, reply) ? sends_ok : sends_failed)++;
+        }
+        return Err::ok;
+    }
+    void conn_closed(size_t) { ++closed; }
+    void tick(uint32_t) {
+        if (!from_tick.empty()) {
+            (t.send(0, from_tick) ? sends_ok : sends_failed)++;
+            from_tick = ByteSpan{};
+        }
+    }
 };
 
 // A broker wired to a capture transport, plus driving helpers. Traits
