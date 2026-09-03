@@ -124,7 +124,7 @@ Full details, the `TableAcl` component, and the threat model are in
 | Duplicate identical filter within one SUBSCRIBE | one subscription, one return code per entry, retained messages replayed once |
 | SUBSCRIBE/UNSUBSCRIBE that is a protocol error | validated in full before anything is applied, so the packet has no partial effect |
 | Client connects with keep-alive 0 | never timed out, unless `max_idle_ms` is set (see [Security](security.md)) |
-| Empty client id, clean session | server assigns a unique `mmq-<n>` id |
+| Empty client id, clean session | server assigns a unique `mmq-<n>` id; the `mmq-` prefix is reserved, so a client presenting one is refused with CONNACK 0x02 |
 | Empty client id, persistent session | CONNACK 0x02, connection closed |
 | Retained store full | best effort: not stored, still forwarded live |
 | Retained message too big to store, topic already retained | the previous value is **purged**, not left to be served as current; still forwarded live |

@@ -345,30 +345,47 @@ TEST(app_publish_rejects_a_payload_that_could_never_be_built) {
 
 // ------------------------------------- server-assigned identifiers
 
-TEST(assigned_client_ids_avoid_ones_already_in_use) {
-    // A zero-byte client id makes the broker invent one, "mmq-<n>". The
-    // counter is not authoritative — a client is free to connect as
-    // "mmq-1" itself — so the broker must check for a collision and try
-    // again rather than hand out a duplicate and merge two sessions.
+TEST(the_assigned_id_prefix_is_reserved) {
+    // The counter is sequential and starts at 1, so "mmq-1" is always
+    // the first id handed out. A peer allowed to present it could claim
+    // a live anonymous client's session under [MQTT-3.1.4-2] and have
+    // the owner disconnected, with no guessing — and walking the range
+    // would evict every anonymous client on the broker. The prefix is
+    // refused instead.
     Bed x;
-    connected(x, 0, "mmq-1");  // squat on the first name the broker would pick
+    x.connect(0, "mmq-1");
+    expect_connack(x.t, 0, false, ConnackCode::identifier_rejected);
 
+    // Any id in the space, not just one already handed out.
+    x.connect(1, "mmq-99999");
+    expect_connack(x.t, 1, false, ConnackCode::identifier_rejected);
+    x.connect(2, "mmq-");
+    expect_connack(x.t, 2, false, ConnackCode::identifier_rejected);
+
+    // Ids that merely resemble it are unaffected.
+    x.connect(3, "mmq");
+    expect_connack(x.t, 3, false, ConnackCode::accepted);
+}
+
+TEST(an_assigned_id_still_gets_a_session_of_its_own) {
+    // The broker generates its own id past the reservation, and that
+    // session is separate from every other client's.
+    Bed x;
     wire::ConnectOpts clean;
-    x.connect(1, "", clean);
-    expect_connack(x.t, 1, false, ConnackCode::accepted);
+    x.connect(0, "", clean);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
 
-    // The squatter keeps its own session: a publish to a filter only it
-    // subscribed to must not reach the newcomer.
-    x.feed(0, wire::make_subscribe(1, {{"squat/#", 0}}));
+    connected(x, 1, "named");
+    x.feed(1, wire::make_subscribe(1, {{"own/#", 0}}));
     const uint8_t codes[] = {0};
-    expect_suback(x.t, 0, 1, codes);
+    expect_suback(x.t, 1, 1, codes);
 
     x.connect(2, "pub");
     expect_connack(x.t, 2, false, ConnackCode::accepted);
-    x.feed(2, wire::make_publish("squat/x", wire::bs("hi")));
+    x.feed(2, wire::make_publish("own/x", wire::bs("hi")));
 
-    expect_publish(x.t, 0, "squat/x", wire::bs("hi"), QoS::at_most_once, false);
-    expect_silence(x.t, 1);  // the assigned id got a session of its own
+    expect_publish(x.t, 1, "own/x", wire::bs("hi"), QoS::at_most_once, false);
+    expect_silence(x.t, 0);  // the assigned id subscribed to nothing
 }
 
 // -------------------------------------- delivery stops on a dead link
