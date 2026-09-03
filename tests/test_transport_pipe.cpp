@@ -405,6 +405,31 @@ TEST(pipe_open_owns_the_descriptors_on_every_path) {
     }
 }
 
+// A descriptor the transport already holds is closed by the re-open, so
+// handing it straight back cannot work. Refusing beats taking a number
+// that no longer means what the caller meant — and beats closing it a
+// second time, when another thread may already have been given it.
+TEST(pipe_open_refuses_a_descriptor_it_already_holds) {
+    int held[2];
+    int other[2];
+    CHECK(::pipe(held) == 0);
+    CHECK(::pipe(other) == 0);
+
+    Transport t;
+    CHECK(t.open(held[0], held[1]));
+
+    // Mixing one held descriptor with a new one.
+    CHECK(!t.open(held[0], other[1]));
+    CHECK(t.closed());
+
+    // other[1] was not the stale one, so open() owned and closed it.
+    const uint8_t byte = 'a';
+    errno = 0;
+    CHECK(::write(other[1], &byte, 1) < 0);
+    CHECK_EQ(errno, EBADF);
+    ::close(other[0]);
+}
+
 // A failed open() on a transport that already holds a pair leaves it
 // closed, rather than keeping descriptors while reporting failure.
 TEST(pipe_failed_open_releases_the_pair_it_held) {

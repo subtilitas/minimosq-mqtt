@@ -65,11 +65,24 @@ public:
     // close a number the kernel has since handed to something else.
     //
     // Calling open() again closes the pair it already holds first, and
-    // a failed open() leaves the transport closed either way.
+    // a failed open() leaves the transport closed either way. A
+    // descriptor this transport already holds cannot be handed back:
+    // it is closed by that step, so open() refuses rather than take a
+    // number that is no longer what the caller meant.
     bool open(int read_fd, int write_fd) {
+        // What is about to be closed, so a descriptor handed straight
+        // back is never closed twice: after close_fds() that number may
+        // already belong to something else, and closing it again would
+        // take a file this transport has nothing to do with.
+        const int was_r = rfd_;
+        const int was_w = wfd_;
         close_fds();  // whatever happens next, the old pair is not kept
-        if (read_fd < 0 || write_fd < 0) {
-            close_pair(read_fd, write_fd);
+
+        const bool r_stale = read_fd >= 0 && (read_fd == was_r || read_fd == was_w);
+        const bool w_stale = write_fd >= 0 && (write_fd == was_r || write_fd == was_w);
+        if (read_fd < 0 || write_fd < 0 || r_stale || w_stale) {
+            // Only what is still this transport's to close.
+            close_pair(r_stale ? -1 : read_fd, w_stale ? -1 : write_fd);
             return false;
         }
         // Both, not the first that succeeds: a short-circuit would leave
