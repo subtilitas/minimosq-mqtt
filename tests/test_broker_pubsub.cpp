@@ -360,8 +360,8 @@ TEST(retained_replay_pauses_instead_of_dropping_the_subscriber) {
     const char* topics[] = {"aaaaaaaa/bbbbbbbb/cccccccc/dd", "aaaaaaaa/bbbbbbbb/cccccccc/ee",
                             "aaaaaaaa/bbbbbbbb/cccccccc/ff"};
     for (const char* tp : topics) {
-        CHECK(b.publish(minimosq::StrView{tp, __builtin_strlen(tp)},
-                        minimosq::ByteSpan{payload, sizeof payload}, minimosq::QoS::at_most_once,
+        CHECK(b.publish(minimosq::StrView{tp}, minimosq::ByteSpan{payload, sizeof payload},
+                        minimosq::QoS::at_most_once,
                         /*retain=*/true) == minimosq::Err::ok);
     }
 

@@ -7,10 +7,17 @@
 //
 //   struct MyTransport {
 //       // Queue bytes for transmission on a connection. The whole span
-//       // must be accepted (buffer internally). Return false only when
-//       // the connection is beyond saving (e.g. its output buffer
-//       // overflowed because of a slow consumer); the broker then
-//       // drops the connection.
+//       // must be accepted (buffer internally). Return false when the
+//       // span cannot be taken — typically the output buffer is full
+//       // after the transport already tried to drain it.
+//       //
+//       // What the broker makes of a refusal depends on what it was
+//       // sending. For traffic driven by the peer or by another client
+//       // it is a slow consumer and the connection is dropped. For a
+//       // burst the broker generated itself — retained replay, the
+//       // queue flush on reconnect — a refusal only says the broker
+//       // outran the buffer, so it pauses and resumes on a later pass
+//       // rather than punishing the peer for it.
 //       bool send(size_t conn, minimosq::ByteSpan bytes);
 //
 //       // Tear a connection down (broker-initiated). Free the slot and

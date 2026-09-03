@@ -23,8 +23,10 @@
 //     connection WITHOUT calling conn_closed(ci) back; conn_closed is
 //     only for closes the broker did not initiate.
 //   - send() must queue the whole span (transports buffer internally);
-//     returning false means the connection is beyond saving (e.g. its
-//     buffer overflowed) and makes the broker drop it.
+//     returning false means the span could not be taken. For traffic the
+//     broker did not generate that is a slow consumer and the connection
+//     is dropped; for a self-generated burst (retained replay, the queue
+//     flush on reconnect) it paces instead. See transport.hpp.
 //   - now_ms is any monotonic millisecond clock; wrap-around is fine.
 //
 // Reentrancy: teardown work (will publishing, transport close) is
@@ -282,7 +284,7 @@ public:
         // pass continues here, so the burst is paced by the transport
         // rather than costing the subscriber its connection.
         sessions_.for_each([&](SessionT& s) {
-            if (s.connected() && any_retain_pending(s)) {
+            if (s.connected() && !conns_[s.conn].dead && any_retain_pending(s)) {
                 replay_retained(s.conn, s);
             }
         });
@@ -498,7 +500,7 @@ private:
     // and can pause instead: a burst it chose to emit is not evidence
     // about the peer.
     bool try_send_to(size_t ci, ByteSpan pkt) {
-        Conn& c = conns_[ci];
+        const Conn& c = conns_[ci];
         if (!c.active || c.dead || pkt.empty()) {
             return false;
         }
@@ -754,23 +756,37 @@ private:
                 return;
             }
             typename SessionT::OutMsg& m = s.pending[i];
-            switch (m.state) {
-            case OutState::queued:
-                m.packet_id = s.alloc_packet_id();
-                m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
-                                                        : OutState::awaiting_pubrec;
-                break;
-            case OutState::awaiting_puback:
-            case OutState::awaiting_pubrec:
-                m.dup = true;
-                break;
-            case OutState::awaiting_pubcomp:
-                send_to(s.conn,
-                        build_packet_id_only(out_, sizeof out_, PacketType::pubrel, m.packet_id));
+            if (m.state == OutState::awaiting_pubcomp) {
+                if (!try_send_to(s.conn, build_packet_id_only(out_, sizeof out_, PacketType::pubrel,
+                                                              m.packet_id))) {
+                    return;  // paced: tick() pumps the rest
+                }
                 continue;
             }
-            send_to(s.conn, build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
-                                          m.qos, m.retain, m.dup, m.packet_id));
+            // A queued message is being sent for the first time; one
+            // already in flight is a retransmission and carries DUP.
+            const bool first_send = (m.state == OutState::queued);
+            const uint16_t id = first_send ? s.alloc_packet_id() : m.packet_id;
+            const bool dup = first_send ? m.dup : true;
+            const ByteSpan pkt = build_publish(out_, sizeof out_, m.topic.view(), m.payload.view(),
+                                               m.qos, m.retain, dup, id);
+            if (pkt.empty()) {
+                notify_drop(s, m.topic.view(), m.qos, Err::oversize);
+                s.pending.remove_ordered(i--);
+                continue;
+            }
+            // This burst is as wide as the queue, so a refusal is the
+            // broker outrunning the ring rather than a slow peer.
+            if (!try_send_to(s.conn, pkt)) {
+                return;
+            }
+            if (first_send) {
+                m.packet_id = id;
+                m.state = (m.qos == QoS::at_least_once) ? OutState::awaiting_puback
+                                                        : OutState::awaiting_pubrec;
+            } else {
+                m.dup = true;
+            }
         }
     }
 
@@ -1189,6 +1205,10 @@ private:
         // monopolise a poll pass and starve tick(). This form sends at
         // most R, whatever K is.
         if (any_retain_pending(s)) {
+            // This SUBSCRIBE brings its own grants. A cursor left by a
+            // replay still paused from an earlier one would skip the
+            // entries these grants match, so the walk restarts.
+            s.retain_cursor = 0;
             replay_retained(ci, s);
         }
     }
