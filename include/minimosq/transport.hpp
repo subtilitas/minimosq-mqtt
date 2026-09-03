@@ -25,9 +25,15 @@
 //       // hold a reference to the session being served; conn_closed()
 //       // runs the deferred teardown, which can release that session
 //       // and leave the caller reading an object that no longer
-//       // exists. A peer detected dead while sending is reported by
-//       // returning false — the broker tears the connection down at
-//       // the end of the pass, which is what that path is for.
+//       // exists.
+//       //
+//       // A peer found dead while sending is reported the same way as
+//       // any other refusal: return false. What follows depends on what
+//       // the broker was sending, per the paragraph above — ordinary
+//       // traffic drops the connection, a self-generated burst paces
+//       // and tries again. A transport that must not be asked again
+//       // closes the connection on its own next pass and reports it
+//       // through conn_closed() from there, not from inside send().
 //       bool send(size_t conn, minimosq::ByteSpan bytes);
 //
 //       // Tear a connection down (broker-initiated). Free the slot and
