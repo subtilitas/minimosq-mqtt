@@ -1,7 +1,7 @@
 # Code review — minimosq
 
 Full-tree audit of `include/`, `tests/`, `examples/`, `tools/`, the build
-files and CI, at commit `f70eac1`.
+files and CI, at commit `d9ad810` — 15 test binaries, 133 cases.
 
 **Verdict.** This is careful, well-documented code. I found no
 memory-safety defect reachable from the network, no protocol-parsing
@@ -12,7 +12,7 @@ or a narrow spec deviation.
 > **All findings in this report have since been fixed** — see
 > [Resolution](#resolution) below. The report is kept in full as the
 > record of what was found and how it was verified; each section
-> describes the code as it was at `f70eac1`.
+> describes the code as it was at `d9ad810`.
 
 ## Resolution
 
@@ -450,9 +450,10 @@ Two additions remain worth considering, neither of which was a finding:
 
 # Second pass
 
-A follow-up audit of the same tree at `2a9e340` (v0.3.5), re-verifying the
-first review's fixes and looking specifically at what the broker does
-when it runs out of room.
+A follow-up audit of the same tree at `6a61b93`, the `release: 0.3.5`
+commit — 17 test binaries, 193 cases. It re-verifies the first review's
+fixes and looks specifically at what the broker does when it runs out of
+room.
 
 **Verdict.** The parts the first review vouched for held up under
 re-verification: no memory-safety defect across ~1.5M fuzzed packets,
