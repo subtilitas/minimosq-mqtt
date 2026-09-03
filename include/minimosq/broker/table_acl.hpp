@@ -22,11 +22,15 @@
 //     per-delivery receive check backs this up regardless.
 //
 // Security notes:
-//   - Passwords are compared in constant time, but they are stored
-//     and transmitted in plain text — that is MQTT 3.1.1. Run TLS
-//     underneath (see docs/tls.md) for anything real, and swap the
-//     comparison for a salted-hash check if plaintext storage does
-//     not fit your threat model (the policy interface doesn't care).
+//   - Usernames and passwords are both compared in constant time
+//     with respect to their contents, so neither the presence of a
+//     username nor how far a guess matches one is observable. The
+//     length of a stored secret is: the comparison runs over the
+//     shorter of the two. Both are stored and transmitted in plain
+//     text — that is MQTT 3.1.1. Run TLS underneath (see docs/tls.md)
+//     for anything real, and swap the comparison for a salted-hash
+//     check if plaintext storage does not fit your threat model (the
+//     policy interface doesn't care).
 //   - Identity is username-based. For client-certificate or
 //     client-id-based identity, write your own policy; this file is
 //     also the worked example for that.
@@ -119,15 +123,21 @@ public:
             return ConnackCode::accepted;
         }
         // The whole table is scanned whether or not the name matches, and
-        // the password of every entry is compared. An early return on the
+        // both fields of every entry are compared. An early return on the
         // matching name would make "unknown user" measurably faster than
         // "wrong password" and turn the broker into a user-enumeration
         // oracle by timing, even though both answer bad_credentials.
+        //
+        // The name comparison is constant time for the same reason the
+        // password one is. An ordinary compare stops at the first
+        // differing byte, so the cost of a probe would grow with how far
+        // it matches a stored name and recover one character at a time.
         const ByteSpan supplied = (password != nullptr) ? *password : ByteSpan{};
         uint8_t found = 0;
         uint8_t role = 0;
         for (const User& u : users_) {
-            const uint8_t name_hit = u.name.equals(*username) ? 1u : 0u;
+            const uint8_t name_hit =
+                constant_time_eq(u.name.view().bytes(), username->bytes()) ? 1u : 0u;
             const uint8_t pw_hit = constant_time_eq(u.password.view(), supplied) ? 1u : 0u;
             const uint8_t hit = static_cast<uint8_t>(name_hit & pw_hit);
             // Branch-free select: keep the first full match.
