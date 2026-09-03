@@ -21,11 +21,11 @@ add_subdirectory(third_party/minimosq-mqtt)
 include(FetchContent)
 FetchContent_Declare(minimosq
   GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
-  GIT_TAG v0.6.2)
+  GIT_TAG v0.7.0-rc1)
 FetchContent_MakeAvailable(minimosq)
 
 # installed system-wide or into a prefix
-find_package(minimosq 0.6 REQUIRED)
+find_package(minimosq 0.7 REQUIRED)
 
 target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```

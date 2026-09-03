@@ -165,7 +165,7 @@ path, or pick it up with CMake:
 
 ```cmake
 # installed (cmake --install build), or from a package manager
-find_package(minimosq 0.6 REQUIRED)
+find_package(minimosq 0.7 REQUIRED)
 
 # or vendored, without installing anything
 add_subdirectory(third_party/minimosq-mqtt)
