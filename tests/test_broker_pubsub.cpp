@@ -422,3 +422,48 @@ TEST(queued_delivery_pauses_and_resumes_instead_of_dropping) {
     CHECK_EQ(t.packets, before + 3);
     CHECK_EQ(t.closed, 0);
 }
+
+// A PUBREL the transport refuses is the one piece of outbound work that
+// nothing else retransmits between reconnects: resume_session sends it,
+// and only on reconnect. Refused and forgotten, the session would sit in
+// awaiting_pubcomp and the QoS 2 flow would never finish.
+TEST(refused_pubrel_is_retried_rather_than_stranding_qos2) {
+    using Tr = BudgetTransport<SmallTraits::max_connections, 280>;
+    Tr t;
+    minimosq::Broker<SmallTraits, Tr> b{t};
+
+    const uint8_t payload[] = {'h', 'i'};
+    wire::ConnectOpts persistent;
+    persistent.clean = false;
+
+    // A QoS 2 delivery driven as far as awaiting_pubcomp.
+    b.conn_open(0, 1000);
+    b.conn_data(0, wire::make_connect("c1", persistent).span(), 1000);
+    b.conn_data(0, wire::make_subscribe(1, {{"a/#", 2}}).span(), 1000);
+    t.drain();
+    CHECK(b.publish(minimosq::StrView{"a/x"}, minimosq::ByteSpan{payload, sizeof payload},
+                    minimosq::QoS::exactly_once, /*retain=*/false) == minimosq::Err::ok);
+    // PUBREC moves it to awaiting_pubcomp and puts a PUBREL on the wire.
+    b.conn_data(0, wire::make_ack(minimosq::PacketType::pubrec, 1).span(), 1000);
+    b.conn_closed(0);
+
+    // Reconnect with only enough budget for the CONNACK, so the PUBREL
+    // retransmit is refused.
+    t.drain();
+    t.used = 280 - 6;
+    b.conn_open(0, 2000);
+    b.conn_data(0, wire::make_connect("c1", persistent).span(), 2000);
+    const size_t after_connack = t.packets;
+    CHECK_EQ(t.closed, 0);  // a refused PUBREL is not a slow consumer
+
+    // The next pass has room, and the PUBREL goes out.
+    t.drain();
+    b.tick(2100);
+    CHECK_EQ(t.packets, after_connack + 1);
+    CHECK_EQ(t.closed, 0);
+
+    // It is sent once, not on every tick.
+    t.drain();
+    b.tick(2200);
+    CHECK_EQ(t.packets, after_connack + 1);
+}
