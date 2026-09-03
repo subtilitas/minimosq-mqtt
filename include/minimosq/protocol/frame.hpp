@@ -27,7 +27,9 @@ public:
     // complete packet. body points into the parser's buffer and is only
     // valid during the call. on_packet returns false to stop consuming
     // (the caller is tearing the connection down); remaining input is
-    // discarded and feed() returns Err::ok.
+    // discarded and feed() returns Err::ok. The packet just delivered is
+    // consumed, so the parser is left on a packet boundary: a later
+    // feed() reads the next packet rather than this one again.
     //
     // On any non-ok result the parser is left in an undefined state and
     // the connection must be closed (or reset() called).
@@ -58,10 +60,15 @@ public:
                     return Err::oversize;
                 }
                 if (rem_len_ == 0) {
-                    if (!on_packet(first_byte_, ByteSpan{})) {
+                    const bool go_on = on_packet(first_byte_, ByteSpan{});
+                    // The packet was delivered, so it is consumed whether
+                    // or not the caller wants more. Stopping with the
+                    // state left mid-packet would have the next feed()
+                    // read this packet's remainder as a new one.
+                    state_ = State::first_byte;
+                    if (!go_on) {
                         return Err::ok;
                     }
-                    state_ = State::first_byte;
                 } else {
                     state_ = State::body;
                 }
@@ -78,10 +85,11 @@ public:
                 body_len_ += take;
                 i += take;
                 if (body_len_ == rem_len_) {
-                    if (!on_packet(first_byte_, ByteSpan{body_, body_len_})) {
+                    const bool go_on = on_packet(first_byte_, ByteSpan{body_, body_len_});
+                    state_ = State::first_byte;  // consumed either way
+                    if (!go_on) {
                         return Err::ok;
                     }
-                    state_ = State::first_byte;
                 }
                 break;
             }
