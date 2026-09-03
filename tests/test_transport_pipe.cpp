@@ -339,3 +339,129 @@ TEST(pipe_signal_interrupted_pass_still_writes) {
     ::close(pp.c2b[1]);
     ::close(pp.b2c[0]);
 }
+
+// ------------------------------------------------ descriptor ownership
+//
+// open() took ownership before the step that can fail and released
+// nothing when it did, so a caller that cleaned up after a failed open
+// closed descriptors the transport still held and would close again from
+// its destructor. By then the numbers are typically recycled, so the
+// second close lands on an unrelated file.
+
+TEST(pipe_open_owns_the_descriptors_on_every_path) {
+    // A descriptor that is closed already: fcntl() on it fails, which is
+    // the failure open() used to leak through.
+    int c2b[2];
+    CHECK(::pipe(c2b) == 0);
+    const int dead_read = c2b[0];
+    const int dead_write = c2b[1];
+    ::close(dead_read);
+    ::close(dead_write);
+
+    // A live pipe is forced onto exactly the numbers the failed open()
+    // was handed, while the transport is still alive. Relying on the
+    // kernel to hand those numbers back would make the test pass by
+    // luck whenever it chose different ones.
+    int fresh[2];
+    {
+        Transport t;
+        CHECK(!t.open(dead_read, dead_write));  // set_nonblocking fails
+        CHECK(t.closed());                      // and nothing is retained
+
+        int tmp[2];
+        CHECK(::pipe(tmp) == 0);
+        CHECK(::dup2(tmp[0], dead_read) == dead_read);
+        CHECK(::dup2(tmp[1], dead_write) == dead_write);
+        // pipe() usually hands back the very numbers just freed, in
+        // which case dup2 was a no-op onto itself and closing tmp would
+        // close the descriptors under test.
+        if (tmp[0] != dead_read) {
+            ::close(tmp[0]);
+        }
+        if (tmp[1] != dead_write) {
+            ::close(tmp[1]);
+        }
+        fresh[0] = dead_read;
+        fresh[1] = dead_write;
+    }  // the destructor runs here, on those exact numbers
+
+    const uint8_t byte = 'x';
+    CHECK(::write(fresh[1], &byte, 1) == 1);
+    uint8_t got = 0;
+    CHECK(::read(fresh[0], &got, 1) == 1);
+    CHECK_EQ(got, uint8_t{'x'});
+    ::close(fresh[0]);
+    ::close(fresh[1]);
+
+    // A negative descriptor is refused, and the valid one it was given is
+    // closed with it. p[1] was never passed in, so the test owns it.
+    {
+        int p[2];
+        CHECK(::pipe(p) == 0);
+        Transport t;
+        CHECK(!t.open(p[0], -1));
+        CHECK(t.closed());
+        ::close(p[1]);
+    }
+}
+
+// A descriptor the transport already holds is closed by the re-open, so
+// handing it straight back cannot work. Refusing beats taking a number
+// that no longer means what the caller meant — and beats closing it a
+// second time, when another thread may already have been given it.
+TEST(pipe_open_refuses_a_descriptor_it_already_holds) {
+    int held[2];
+    int other[2];
+    CHECK(::pipe(held) == 0);
+    CHECK(::pipe(other) == 0);
+
+    Transport t;
+    CHECK(t.open(held[0], held[1]));
+
+    // Mixing one held descriptor with a new one.
+    CHECK(!t.open(held[0], other[1]));
+    CHECK(t.closed());
+
+    // other[1] was not the stale one, so open() owned and closed it.
+    const uint8_t byte = 'a';
+    errno = 0;
+    CHECK(::write(other[1], &byte, 1) < 0);
+    CHECK_EQ(errno, EBADF);
+    ::close(other[0]);
+}
+
+// A failed open() on a transport that already holds a pair leaves it
+// closed, rather than keeping descriptors while reporting failure.
+TEST(pipe_failed_open_releases_the_pair_it_held) {
+    int held[2];
+    CHECK(::pipe(held) == 0);
+
+    Transport t;
+    CHECK(t.open(held[0], held[1]));
+    CHECK(!t.closed());
+
+    CHECK(!t.open(-1, -1));  // refused
+    CHECK(t.closed());       // and the pair it held is gone
+
+    const uint8_t byte = 'z';
+    errno = 0;
+    CHECK(::write(held[1], &byte, 1) < 0);
+    CHECK_EQ(errno, EBADF);
+}
+
+TEST(pipe_second_open_does_not_orphan_the_first_pair) {
+    int first[2];
+    int second[2];
+    CHECK(::pipe(first) == 0);
+    CHECK(::pipe(second) == 0);
+
+    Transport t;
+    CHECK(t.open(first[0], first[1]));
+    CHECK(t.open(second[0], second[1]));  // the first pair is closed here
+
+    // The first pair's write end is closed, so writing to it fails.
+    const uint8_t byte = 'y';
+    errno = 0;
+    CHECK(::write(first[1], &byte, 1) < 0);
+    CHECK_EQ(errno, EBADF);
+}

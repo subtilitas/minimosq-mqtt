@@ -58,17 +58,45 @@ public:
 
     ~PipeTransport() { close_fds(); }
 
-    // Takes ownership of both descriptors.
+    // Takes ownership of both descriptors, on success and on failure
+    // alike: when open() returns false it has closed whatever it was
+    // given, and the transport is left closed. The caller never closes a
+    // descriptor it has passed here — doing so after a failure would
+    // close a number the kernel has since handed to something else.
+    //
+    // Calling open() again closes the pair it already holds first, and
+    // a failed open() leaves the transport closed either way. A
+    // descriptor this transport already holds cannot be handed back:
+    // it is closed by that step, so open() refuses rather than take a
+    // number that is no longer what the caller meant.
     bool open(int read_fd, int write_fd) {
-        if (read_fd < 0 || write_fd < 0) {
+        // What is about to be closed, so a descriptor handed straight
+        // back is never closed twice: after close_fds() that number may
+        // already belong to something else, and closing it again would
+        // take a file this transport has nothing to do with.
+        const int was_r = rfd_;
+        const int was_w = wfd_;
+        close_fds();  // whatever happens next, the old pair is not kept
+
+        const bool r_stale = read_fd >= 0 && (read_fd == was_r || read_fd == was_w);
+        const bool w_stale = write_fd >= 0 && (write_fd == was_r || write_fd == was_w);
+        if (read_fd < 0 || write_fd < 0 || r_stale || w_stale) {
+            // Only what is still this transport's to close.
+            close_pair(r_stale ? -1 : read_fd, w_stale ? -1 : write_fd);
+            return false;
+        }
+        // Both, not the first that succeeds: a short-circuit would leave
+        // the write end blocking after the read end failed.
+        const bool read_ok = set_nonblocking(read_fd);
+        const bool write_ok = set_nonblocking(write_fd);
+        if (!read_ok || !write_ok) {
+            close_pair(read_fd, write_fd);
             return false;
         }
         rfd_ = read_fd;
         wfd_ = write_fd;
-        started_ = false;
-        ring_.clear();
-        dirty_ = false;
-        return set_nonblocking(rfd_) && set_nonblocking(wfd_);
+        started_ = false;  // close_fds() above cleared the ring and dirty_
+        return true;
     }
 
     bool closed() const noexcept { return rfd_ < 0; }
@@ -207,13 +235,19 @@ private:
         }
     }
 
+    // One descriptor may be both ends (a caller can pass the same fd
+    // twice), so the second close is guarded against closing it again.
+    static void close_pair(int a, int b) noexcept {
+        if (a >= 0) {
+            ::close(a);
+        }
+        if (b >= 0 && b != a) {
+            ::close(b);
+        }
+    }
+
     void close_fds() noexcept {
-        if (rfd_ >= 0) {
-            ::close(rfd_);
-        }
-        if (wfd_ >= 0 && wfd_ != rfd_) {
-            ::close(wfd_);
-        }
+        close_pair(rfd_, wfd_);
         rfd_ = -1;
         wfd_ = -1;
         ring_.clear();
