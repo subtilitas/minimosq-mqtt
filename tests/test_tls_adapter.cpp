@@ -235,3 +235,89 @@ TEST(tls_adapter_publishes_the_narrower_capacity) {
     static_assert(TightScratch::out_buf_size == 128, "the adapter's own scratch bound");
     CHECK_EQ(TightScratch::out_buf_size, size_t{128});
 }
+
+// ------------------------------------------- buffering engines and sizing
+
+namespace {
+// Holds the first record it is given and only yields it when drained —
+// the shape the Engine contract permits ("the library can buffer") and
+// which nothing used to pump.
+struct BufferingEngine {
+    static constexpr size_t record_overhead = 8;
+
+    uint8_t held[256];
+    size_t held_len = 0;
+
+    bool on_ciphertext(ByteSpan in, uint8_t* plain, size_t plain_cap, size_t& plain_len, uint8_t*,
+                       size_t, size_t& cipher_len) {
+        cipher_len = 0;
+        plain_len = in.len < plain_cap ? in.len : plain_cap;
+        for (size_t i = 0; i < plain_len; ++i) {
+            plain[i] = in.data[i];
+        }
+        return true;
+    }
+
+    // Accepts the plaintext and writes nothing: the record is buffered.
+    bool encrypt(ByteSpan plain, uint8_t*, size_t, size_t& cipher_len) {
+        cipher_len = 0;
+        if (held_len == 0 && plain.len <= sizeof held) {
+            for (size_t i = 0; i < plain.len; ++i) {
+                held[i] = plain.data[i];
+            }
+            held_len = plain.len;
+        }
+        return true;
+    }
+
+    void reset() { held_len = 0; }
+
+    bool drain(uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) {
+        cipher_len = held_len < cipher_cap ? held_len : 0;
+        for (size_t i = 0; i < cipher_len; ++i) {
+            cipher[i] = held[i];
+        }
+        held_len = 0;
+        return true;
+    }
+};
+}  // namespace
+
+TEST(a_buffered_record_is_drained_rather_than_stranded) {
+    static_assert(engine_has_drain<BufferingEngine>::value, "the engine offers drain()");
+    static_assert(!engine_has_drain<NullTlsEngine>::value,
+                  "and an engine that never buffers may omit it");
+
+    using Raw = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<BufferingEngine, Raw, SmallTraits::max_connections>;
+    Raw raw;
+    Tls tls{raw};
+    Broker<SmallTraits, Tls> b{tls};
+    auto driver = tls.driver(b);
+
+    CHECK(driver.conn_open(0, 1000) == Err::ok);
+    const wire::Pkt connect = wire::make_connect("buffered");
+    driver.conn_data(0, connect.span(), 1000);
+
+    // encrypt() took the CONNACK and reported success with nothing
+    // written, so the raw transport has seen no bytes yet.
+    CHECK_EQ(raw.logs[0].len, size_t{0});
+
+    // The pass drains it.
+    driver.tick(1100);
+    CHECK(raw.logs[0].len > 0);
+}
+
+TEST(the_published_buffer_size_accounts_for_record_growth) {
+    using Raw = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<BufferingEngine, Raw, SmallTraits::max_connections, 1024>;
+    // 1024 of scratch, 8 of which every record spends on framing.
+    static_assert(Tls::out_buf_size == 1024 - 8,
+                  "the broker must check what a packet may occupy, not the raw scratch");
+    CHECK_EQ(Tls::out_buf_size, size_t{1016});
+
+    // An engine that declares no overhead publishes the scratch size.
+    using Plain = TlsAdapter<NullTlsEngine, Raw, SmallTraits::max_connections, 1024>;
+    static_assert(Plain::out_buf_size == 1024, "nothing to subtract");
+    CHECK_EQ(Plain::out_buf_size, size_t{1024});
+}
