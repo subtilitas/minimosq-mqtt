@@ -178,3 +178,51 @@ TEST(tls_adapter_capacity_is_visible_to_the_broker) {
     CHECK_EQ(transport_out_buf_size<HsTls>::value, HsTls::out_buf_size);
     CHECK(transport_out_buf_size<HsTls>::value >= SmallTraits::max_packet_size);
 }
+
+namespace {
+// A raw transport that publishes both capacities, and is tighter than
+// the adapter wrapped around it on each.
+struct NarrowRaw {
+    static constexpr size_t max_connections = 2;
+    static constexpr size_t out_buf_size = 64;
+    bool send(size_t, ByteSpan) { return true; }
+    void close(size_t) {}
+};
+
+// A raw transport that publishes neither.
+struct SilentRaw {
+    bool send(size_t, ByteSpan) { return true; }
+    void close(size_t) {}
+};
+}  // namespace
+
+// The adapter is what the broker's static_asserts inspect, so publishing
+// its own template parameters hides the transport underneath: the broker
+// would check a scratch buffer and a slot count that no byte ever passes
+// through. Both are the narrower of the adapter's and the wrapped
+// transport's.
+TEST(tls_adapter_publishes_the_narrower_capacity) {
+    using OverTls = TlsAdapter<NullTlsEngine, NarrowRaw, 16, 4096>;
+    static_assert(OverTls::max_connections == 2,
+                  "the wrapped transport's slots, not the adapter's 16: handing out an "
+                  "index the raw transport refuses closes the fresh socket");
+    static_assert(transport_max_connections<OverTls>::value == 2,
+                  "and that is the number Broker's check sees");
+    CHECK_EQ(OverTls::max_connections, size_t{2});
+
+    static_assert(OverTls::out_buf_size == 64,
+                  "and the wrapped transport's ring, not the adapter's 4096 scratch");
+    CHECK_EQ(OverTls::out_buf_size, size_t{64});
+
+    // A wrapped transport that publishes nothing constrains nothing, so
+    // the adapter's own numbers stand.
+    using OverUnbuffered = TlsAdapter<NullTlsEngine, SilentRaw, 16, 4096>;
+    static_assert(OverUnbuffered::max_connections == 16, "nothing to narrow against");
+    static_assert(OverUnbuffered::out_buf_size == 4096, "likewise for the buffer");
+    CHECK_EQ(OverUnbuffered::out_buf_size, size_t{4096});
+
+    // And the adapter is the tighter one when its own buffer is smaller.
+    using TightScratch = TlsAdapter<NullTlsEngine, SilentRaw, 4, 128>;
+    static_assert(TightScratch::out_buf_size == 128, "the adapter's own scratch bound");
+    CHECK_EQ(TightScratch::out_buf_size, size_t{128});
+}

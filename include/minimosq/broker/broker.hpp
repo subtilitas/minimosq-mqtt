@@ -53,6 +53,7 @@
 #include "../protocol/utf8.hpp"
 #include "../protocol/writer.hpp"
 #include "../topic.hpp"
+#include "../transport.hpp"
 #include "config.hpp"
 #include "observer.hpp"
 #include "retained.hpp"
@@ -127,30 +128,6 @@ struct traits_session_expiry_ms {
 template <typename T>
 struct traits_session_expiry_ms<T, decltype((void)T::session_expiry_ms)> {
     static constexpr uint32_t value = T::session_expiry_ms;
-};
-
-// A transport that publishes its connection capacity lets the broker
-// check at compile time that the two agree; one that does not is
-// assumed to be correctly sized (0 = "did not say").
-template <typename T, typename = void>
-struct transport_max_connections {
-    static constexpr size_t value = 0;
-};
-template <typename T>
-struct transport_max_connections<T, decltype((void)T::max_connections)> {
-    static constexpr size_t value = T::max_connections;
-};
-
-// Likewise for the outbound buffer: a transport that publishes its
-// capacity lets the broker check that a whole packet fits, and one that
-// does not (or that does not buffer at all) is left alone.
-template <typename T, typename = void>
-struct transport_out_buf_size {
-    static constexpr size_t value = 0;
-};
-template <typename T>
-struct transport_out_buf_size<T, decltype((void)T::out_buf_size)> {
-    static constexpr size_t value = T::out_buf_size;
 };
 
 template <typename Traits, typename Transport, typename Security = AllowAllSecurity,

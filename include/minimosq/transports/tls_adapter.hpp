@@ -50,6 +50,7 @@
 
 #include "../core/error.hpp"
 #include "../core/span.hpp"
+#include "../transport.hpp"
 
 namespace minimosq {
 
@@ -97,17 +98,26 @@ template <typename Engine, typename RawTransport, size_t MaxConns, size_t BufSiz
 class TlsAdapter {
 public:
     // Published so Broker can static_assert against Traits.
-    static constexpr size_t max_connections = MaxConns;
+    // The broker checks its Traits against whatever a transport
+    // publishes, and this adapter is what it sees. Publishing MaxConns
+    // alone would hide a raw transport with fewer slots: the broker
+    // would hand out an index the raw transport refuses, and
+    // StreamServerTransport answers Err::state by closing the fresh
+    // socket. The narrower of the two is the real capacity.
+    static constexpr size_t max_connections =
+        narrower_capacity(MaxConns, transport_max_connections<RawTransport>::value);
 
     // send() encrypts a whole packet into cipher_, so BufSize bounds the
-    // largest packet that can pass through the adapter at all. Published
-    // for the same reason as max_connections: BufSize is declared here
-    // and max_packet_size in Traits, and nothing else makes them agree.
+    // largest packet that can pass through the adapter — and then the
+    // ciphertext goes to the raw transport's buffer, which bounds it
+    // again. Publishing BufSize alone would have the broker check this
+    // adapter's scratch buffer and never the ring the bytes land in.
     //
-    // Necessary, not sufficient: ciphertext is larger than plaintext by
-    // the record overhead, and the raw transport underneath has a buffer
-    // of its own. Both can still refuse a packet this check allows.
-    static constexpr size_t out_buf_size = BufSize;
+    // Still necessary rather than sufficient: ciphertext is larger than
+    // plaintext by the record overhead, which neither number accounts
+    // for, so a packet this check allows can still be refused.
+    static constexpr size_t out_buf_size =
+        narrower_capacity(BufSize, transport_out_buf_size<RawTransport>::value);
 
     explicit TlsAdapter(RawTransport& raw) noexcept : raw_(raw) {}
 

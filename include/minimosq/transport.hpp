@@ -70,6 +70,36 @@ namespace minimosq {
 
 // A transport that swallows everything. Useful for tests and for
 // exercising application-side publish logic without any I/O.
+// A transport that publishes its connection capacity lets the broker
+// check at compile time that the two agree; one that does not is
+// assumed to be correctly sized (0 = "did not say").
+template <typename T, typename = void>
+struct transport_max_connections {
+    static constexpr size_t value = 0;
+};
+template <typename T>
+struct transport_max_connections<T, decltype((void)T::max_connections)> {
+    static constexpr size_t value = T::max_connections;
+};
+
+// Likewise for the outbound buffer: a transport that publishes its
+// capacity lets the broker check that a whole packet fits, and one that
+// does not (or that does not buffer at all) is left alone.
+template <typename T, typename = void>
+struct transport_out_buf_size {
+    static constexpr size_t value = 0;
+};
+template <typename T>
+struct transport_out_buf_size<T, decltype((void)T::out_buf_size)> {
+    static constexpr size_t value = T::out_buf_size;
+};
+
+// The tighter of a wrapper's own capacity and the one it wraps. A
+// wrapped transport that publishes nothing (0) constrains nothing.
+constexpr size_t narrower_capacity(size_t own, size_t wrapped) noexcept {
+    return wrapped == 0 ? own : (wrapped < own ? wrapped : own);
+}
+
 struct NullTransport {
     bool send(size_t conn, ByteSpan bytes) noexcept {
         (void)conn;
