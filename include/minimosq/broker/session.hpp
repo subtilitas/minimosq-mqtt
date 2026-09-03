@@ -123,7 +123,9 @@ struct Session {
     void remove_inbound_qos2(uint16_t id) noexcept {
         for (size_t i = 0; i < inbound_qos2.size(); ++i) {
             if (inbound_qos2[i] == id) {
-                inbound_qos2.remove_unordered(i);
+                // Ordered, so index 0 stays the oldest tracked id and
+                // an eviction can take it.
+                inbound_qos2.remove_ordered(i);
                 return;
             }
         }

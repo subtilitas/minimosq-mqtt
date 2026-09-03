@@ -417,10 +417,12 @@ TEST(retained_replay_skips_messages_no_granted_filter_matches) {
     expect_silence(x.t, 1);
 }
 
-TEST(an_overfull_inbound_qos2_window_reports_a_capacity_violation) {
-    // Dropping the client is the documented policy — duplicate delivery
-    // is never risked — but it used to be indistinguishable from a
-    // malformed packet from outside.
+TEST(an_overfull_inbound_qos2_window_evicts_rather_than_dropping) {
+    // Dropping the client was the documented policy, and it was
+    // unrecoverable: inbound_qos2 survives the disconnect, so every
+    // reconnect died on its first QoS 2 publish, and session_expiry_ms
+    // defaults to never. The oldest tracked id is forgotten instead,
+    // which costs deduplication for that id alone.
     BedT<AllowAllSecurity, Recorder> x;
     x.connect(0, "pub");
     expect_connack(x.t, 0, false, ConnackCode::accepted);
@@ -428,12 +430,41 @@ TEST(an_overfull_inbound_qos2_window_reports_a_capacity_violation) {
         x.feed(0, wire::make_publish("t", wire::bs("v"), QoS::exactly_once, false, false,
                                      static_cast<uint16_t>(i + 1)));
     }
-    CHECK(x.t.logs[0].closed);
-    const Recorder::Row* v = x.b.observer().first(EventKind::protocol_violation);
-    CHECK(v != nullptr);
-    if (v != nullptr) {
-        CHECK(v->err == Err::capacity);
+    CHECK(!x.t.logs[0].closed);  // the client keeps its connection
+    CHECK(x.b.observer().first(EventKind::protocol_violation) == nullptr);
+    const Recorder::Row* e = x.b.observer().first(EventKind::inbound_qos2_evicted);
+    CHECK(e != nullptr);  // and the forgotten id is reported
+
+    // Every publish was answered, including the one that overflowed.
+    for (size_t i = 0; i < SmallTraits::max_inbound_qos2 + 1; ++i) {
+        CapturedPacket p = x.t.next(0);
+        CHECK(p.ok);
+        CHECK(packet_type(p.first_byte) == PacketType::pubrec);
     }
+}
+
+// The defect the eviction closes: a persistent session whose table
+// filled could not be recovered by reconnecting.
+TEST(a_full_inbound_qos2_table_does_not_brick_a_persistent_session) {
+    BedT<AllowAllSecurity, Recorder> x;
+    wire::ConnectOpts persistent;
+    persistent.clean = false;
+    x.connect(0, "keeper", persistent);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+    for (size_t i = 0; i < SmallTraits::max_inbound_qos2; ++i) {
+        x.feed(0, wire::make_publish("t", wire::bs("v"), QoS::exactly_once, false, false,
+                                     static_cast<uint16_t>(i + 1)));
+    }
+    x.b.conn_closed(0);  // no PUBRELs sent: the table stays full
+
+    // Reconnecting and sending one more QoS 2 publish must work.
+    x.connect(1, "keeper", persistent);
+    expect_connack(x.t, 1, true, ConnackCode::accepted);
+    x.feed(1, wire::make_publish("t", wire::bs("v"), QoS::exactly_once, false, false, 500));
+    CHECK(!x.t.logs[1].closed);
+    CapturedPacket p = x.t.next(1);
+    CHECK(p.ok);
+    CHECK(packet_type(p.first_byte) == PacketType::pubrec);
 }
 
 // ---------------------------------------------------- the observer
