@@ -154,15 +154,17 @@ struct transport_out_buf_size<T, decltype((void)T::out_buf_size)> {
 template <typename Traits, typename Transport, typename Security = AllowAllSecurity,
           typename Observer = NullObserver>
 class Broker {
-public:
-    // The outgoing packet build buffer must hold either a forwarded
-    // inbound packet (bounded by max_packet_size) or a packet built from
-    // stored parts (topic + payload + packet id). Declared here rather
-    // than with the storage it sizes because the static_assert below
-    // compares against it, and a class-body static_assert only sees what
-    // precedes it.
+    // A packet built from stored parts: topic + payload + packet id.
+    // Declared here rather than with the storage it sizes because the
+    // static_assert below compares against out_size, and a class-body
+    // static_assert only sees what precedes it.
     static constexpr size_t stored_body_max =
         2 + Traits::max_topic_len + 2 + Traits::max_payload_len;
+
+public:
+    // The framed size of the widest packet the broker builds: either a
+    // forwarded inbound packet, bounded by max_packet_size, or one built
+    // from stored parts. A transport's outbound buffer must hold this.
     static constexpr size_t out_size =
         packet_overhead +
         (Traits::max_packet_size > stored_body_max ? Traits::max_packet_size : stored_body_max);
