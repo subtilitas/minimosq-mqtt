@@ -385,7 +385,19 @@ TEST(an_assigned_id_still_gets_a_session_of_its_own) {
     x.feed(2, wire::make_publish("own/x", wire::bs("hi")));
 
     expect_publish(x.t, 1, "own/x", wire::bs("hi"), QoS::at_most_once, false);
-    expect_silence(x.t, 0);  // the assigned id subscribed to nothing
+    expect_silence(x.t, 0);      // the assigned id subscribed to nothing
+    CHECK(!x.t.logs[0].closed);  // and is silent because of that, not gone
+}
+
+TEST(a_malformed_reserved_id_closes_rather_than_answering) {
+    // [MQTT-1.5.3-1/-2]: ill-formed UTF-8 closes the connection. That
+    // outranks the prefix refusal, which answers with a CONNACK.
+    Bed x;
+    x.b.conn_open(0, 1000);
+    const char bad[] = {'m', 'm', 'q', '-', static_cast<char>(0xC0), static_cast<char>(0x80)};
+    x.b.conn_data(0, wire::make_connect(StrView{bad, sizeof bad}).span(), 1000);
+    CHECK(x.t.logs[0].closed);
+    CHECK(x.t.no_more(0));  // closed, not answered
 }
 
 // -------------------------------------- delivery stops on a dead link

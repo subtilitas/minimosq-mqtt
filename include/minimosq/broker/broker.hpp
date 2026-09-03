@@ -960,18 +960,20 @@ private:
             refuse(ci, ConnackCode::identifier_rejected, client_id);
             return;
         }
+        // Ill-formed UTF-8 anywhere requires closing the connection
+        // [MQTT-1.5.3-1/-2]. (Passwords are binary data.) This runs
+        // before the reserved-prefix check below, so a malformed id
+        // always closes rather than being answered with a CONNACK.
+        if (!utf8_valid(client_id) || (p.has_username && !utf8_valid(p.username))) {
+            notify_violation(ci, Err::malformed);
+            c.dead = true;
+            return;
+        }
         // A client-supplied id in the server-assigned space would let any
         // peer name an anonymous client's session and take it over. The
         // check is on the supplied id, so a generated one still passes.
         if (!p.client_id.empty() && uses_reserved_prefix(client_id)) {
             refuse(ci, ConnackCode::identifier_rejected, client_id);
-            return;
-        }
-        // Ill-formed UTF-8 anywhere requires closing the connection
-        // [MQTT-1.5.3-1/-2]. (Passwords are binary data.)
-        if (!utf8_valid(client_id) || (p.has_username && !utf8_valid(p.username))) {
-            notify_violation(ci, Err::malformed);
-            c.dead = true;
             return;
         }
         if (p.has_will) {
