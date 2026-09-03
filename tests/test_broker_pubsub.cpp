@@ -309,3 +309,79 @@ TEST(app_publish_too_large_reports_oversize) {
           Err::oversize);
     expect_silence(x.t, 0);  // nothing partially delivered
 }
+
+// ------------------------------------------- retained replay backpressure
+//
+// The replay emits one packet per retained message with nothing tying the
+// total to the transport's outbound buffer, so a full store can be wider
+// than the ring. A refusal there says the broker outran its own buffer,
+// not that the peer is slow, so the replay pauses and resumes from tick()
+// instead of costing the subscriber its connection.
+
+namespace {
+// Refuses once a per-pass byte budget is spent, like a ring that only
+// drains when the poll pass ends. drain() is that end-of-pass write.
+template <size_t MaxConns, size_t Budget>
+struct BudgetTransport {
+    static constexpr size_t max_connections = MaxConns;
+    static constexpr size_t out_buf_size = Budget;
+
+    size_t used = 0;
+    size_t packets = 0;
+    int closed = 0;
+
+    bool send(size_t, minimosq::ByteSpan b) {
+        if (used + b.len > Budget) {
+            return false;
+        }
+        used += b.len;
+        ++packets;
+        return true;
+    }
+    void close(size_t) { ++closed; }
+    void drain() { used = 0; }
+};
+}  // namespace
+
+TEST(retained_replay_pauses_instead_of_dropping_the_subscriber) {
+    using Tr = BudgetTransport<SmallTraits::max_connections, 280>;
+    Tr t;
+    minimosq::Broker<SmallTraits, Tr> b{t};
+    static_assert(Tr::out_buf_size >= minimosq::Broker<SmallTraits, Tr>::out_size,
+                  "the ring holds one packet, which is what makes a pause resumable");
+
+    // Three retained messages at the widest the traits allow, so the
+    // replay is 3 x 97 bytes against a 280-byte budget, so the third is
+    // refused and the SUBACK plus two get through.
+    uint8_t payload[SmallTraits::max_payload_len];
+    for (size_t i = 0; i < sizeof payload; ++i) {
+        payload[i] = static_cast<uint8_t>('a' + (i % 26));
+    }
+    const char* topics[] = {"aaaaaaaa/bbbbbbbb/cccccccc/dd", "aaaaaaaa/bbbbbbbb/cccccccc/ee",
+                            "aaaaaaaa/bbbbbbbb/cccccccc/ff"};
+    for (const char* tp : topics) {
+        CHECK(b.publish(minimosq::StrView{tp, __builtin_strlen(tp)},
+                        minimosq::ByteSpan{payload, sizeof payload}, minimosq::QoS::at_most_once,
+                        /*retain=*/true) == minimosq::Err::ok);
+    }
+
+    b.conn_open(0, 1000);
+    b.conn_data(0, wire::make_connect("sub").span(), 1000);
+    t.drain();  // the CONNACK leaves on the first pass
+    const size_t before = t.packets;
+
+    b.conn_data(0, wire::make_subscribe(1, {{"#", 0}}).span(), 1000);
+    // SUBACK plus as many retained packets as the budget took: the
+    // replay is refused partway, and the connection survives it.
+    CHECK(t.packets > before);
+    CHECK(t.packets < before + 1 + 3);
+    CHECK_EQ(t.closed, 0);
+
+    // Each pass drains the ring and tick() resumes the replay.
+    for (int pass = 0; pass < 4 && t.packets < before + 1 + 3; ++pass) {
+        t.drain();
+        b.tick(1000 + static_cast<uint32_t>(pass));
+    }
+    CHECK_EQ(t.packets, before + 1 + 3);  // SUBACK + all three retained
+    CHECK_EQ(t.closed, 0);                // and never dropped as a slow consumer
+}

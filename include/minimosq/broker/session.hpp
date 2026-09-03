@@ -75,6 +75,10 @@ struct Session {
     bool will_retain = false;
     bool has_will = false;
 
+    // How many retained entries the in-progress replay has already
+    // visited. Non-zero only while a replay is paused because the
+    // transport could not take the next packet; see replay_retained().
+    uint16_t retain_cursor = 0;
     bool clean_session = true;
     uint16_t conn = no_conn;  // connection index while connected
 
