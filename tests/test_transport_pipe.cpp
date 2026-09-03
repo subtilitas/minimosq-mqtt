@@ -1,6 +1,7 @@
 // Integration test: the broker behind the pipe transport, over
 // anonymous pipe(2) descriptors.
 // SPDX-License-Identifier: MIT
+#include "broker_util.hpp"
 #include "test.hpp"
 #include "wire_util.hpp"
 
@@ -174,32 +175,7 @@ TEST(pipe_protocol_error_makes_broker_close) {
 
 namespace {
 
-template <typename T>
-struct Scripted {
-    T& t;
-    ByteSpan reply{};
-    int replies = 1;
-    ByteSpan from_tick{};
-    int sends_ok = 0;
-    int sends_failed = 0;
-    int closed = 0;
-
-    explicit Scripted(T& transport) : t(transport) {}
-    Err conn_open(size_t, uint32_t) { return Err::ok; }
-    Err conn_data(size_t ci, ByteSpan, uint32_t) {
-        for (int i = 0; i < replies; ++i) {
-            (t.send(ci, reply) ? sends_ok : sends_failed)++;
-        }
-        return Err::ok;
-    }
-    void conn_closed(size_t) { ++closed; }
-    void tick(uint32_t) {
-        if (!from_tick.empty()) {
-            (t.send(0, from_tick) ? sends_ok : sends_failed)++;
-            from_tick = ByteSpan{};
-        }
-    }
-};
+using bt::Scripted;
 
 // Read from the broker->client pipe until `want` bytes arrived, pumping
 // the loop in between.
