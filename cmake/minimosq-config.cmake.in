@@ -4,7 +4,7 @@
 # an include directory and the C++17 requirement, and nothing else. There
 # are no dependencies to find and no libraries to link.
 #
-#     find_package(minimosq 0.6 REQUIRED)
+#     find_package(minimosq 1.0 REQUIRED)
 #     target_link_libraries(my_app PRIVATE minimosq::minimosq)
 #
 # SPDX-License-Identifier: MIT

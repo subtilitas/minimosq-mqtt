@@ -165,7 +165,7 @@ path, or pick it up with CMake:
 
 ```cmake
 # installed (cmake --install build), or from a package manager
-find_package(minimosq 0.6 REQUIRED)
+find_package(minimosq 1.0 REQUIRED)
 
 # or vendored, without installing anything
 add_subdirectory(third_party/minimosq-mqtt)
@@ -175,7 +175,7 @@ target_link_libraries(my_app PRIVATE minimosq::minimosq)
 
 `minimosq::minimosq` is an INTERFACE target: an include path and a C++17
 requirement, nothing else. `<minimosq/version.hpp>` identifies the copy
-you have — `MINIMOSQ_VERSION_AT_LEAST(0, 6, 0)` works in the
+you have — `MINIMOSQ_VERSION_AT_LEAST(1, 0, 0)` works in the
 preprocessor, which matters for a library people vendor by copying
 headers.
 
