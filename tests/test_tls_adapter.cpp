@@ -214,6 +214,15 @@ TEST(tls_adapter_publishes_the_narrower_capacity) {
                   "and the wrapped transport's ring, not the adapter's 4096 scratch");
     CHECK_EQ(OverTls::out_buf_size, size_t{64});
 
+    // The published capacity is the bound the adapter itself uses, so it
+    // hands out no engine for an index the wrapped transport refuses.
+    NarrowRaw raw;
+    OverTls tls{raw};
+    CHECK(tls.engine(0) != nullptr);
+    CHECK(tls.engine(1) != nullptr);
+    CHECK(tls.engine(2) == nullptr);   // past the wrapped transport's slots
+    CHECK(tls.engine(15) == nullptr);  // and well past, though MaxConns is 16
+
     // A wrapped transport that publishes nothing constrains nothing, so
     // the adapter's own numbers stand.
     using OverUnbuffered = TlsAdapter<NullTlsEngine, SilentRaw, 16, 4096>;

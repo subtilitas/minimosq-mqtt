@@ -121,12 +121,12 @@ public:
 
     explicit TlsAdapter(RawTransport& raw) noexcept : raw_(raw) {}
 
-    Engine* engine(size_t ci) noexcept { return ci < MaxConns ? &engines_[ci] : nullptr; }
+    Engine* engine(size_t ci) noexcept { return ci < max_connections ? &engines_[ci] : nullptr; }
 
     // ------------------------- transport policy (the broker calls this)
 
     bool send(size_t ci, ByteSpan plaintext) {
-        if (ci >= MaxConns) {
+        if (ci >= max_connections) {
             return false;
         }
         size_t cipher_len = 0;
@@ -137,7 +137,7 @@ public:
     }
 
     void close(size_t ci) {
-        if (ci < MaxConns) {
+        if (ci < max_connections) {
             raw_.close(ci);
         }
     }
@@ -156,7 +156,7 @@ public:
         B& broker;
 
         Err conn_open(size_t ci, uint32_t now_ms) {
-            if (ci >= MaxConns) {
+            if (ci >= max_connections) {
                 return Err::state;
             }
             tls.engines_[ci].reset();
@@ -164,13 +164,13 @@ public:
         }
 
         void conn_closed(size_t ci) {
-            if (ci < MaxConns) {
+            if (ci < max_connections) {
                 broker.conn_closed(ci);
             }
         }
 
         Err conn_data(size_t ci, ByteSpan cipher_in, uint32_t now_ms) {
-            if (ci >= MaxConns) {
+            if (ci >= max_connections) {
                 return Err::state;
             }
             // The record buffers live in the adapter, not on the stack:
@@ -210,7 +210,9 @@ public:
 
 private:
     RawTransport& raw_;
-    Engine engines_[MaxConns];
+    // Sized by the published capacity: an index past it never reaches
+    // the wrapped transport, so an engine for it could never be used.
+    Engine engines_[max_connections];
     // Shared record scratch; see Driver::conn_data. Only ever live for
     // the duration of one call.
     uint8_t plain_[BufSize];
