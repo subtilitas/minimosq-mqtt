@@ -4,6 +4,27 @@
 // needs, backed entirely by in-object storage. Never allocates, never
 // throws: push_back/emplace_back report failure instead.
 //
+// T must not throw on value-initialisation, copy construction,
+// assignment or destruction. The mutators are noexcept and do all four
+// inside themselves — emplace_back() value-initialises with T(), which
+// zeroes a scalar rather than leaving it indeterminate, push_back()
+// copy-constructs, remove_ordered() and remove_unordered() assign from
+// an rvalue to close the gap, and clear() destroys — so a throwing
+// element type terminates rather than propagating. Assignment covers
+// both operators: an rvalue binds to a copy-assignment operator when
+// the type has no move assignment, so a throwing copy assignment is
+// just as fatal. The library stores scalars and aggregates of
+// fixed-size arrays here, none of which can throw; the requirement is
+// stated for anyone reusing the container.
+//
+// Known deviation: ptr() launders the address of a slot whether or not
+// an object is live in it, and begin()/end() form that address on an
+// empty vector. [ptr.launder] requires a live object, so those two cases
+// are undefined by the letter of the standard. They are on the hottest
+// path in the library and no misbehaviour has been observed — the suite
+// runs clean under AddressSanitizer and UndefinedBehaviorSanitizer with
+// -fno-sanitize-recover=all. Recorded rather than papered over.
+//
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_CORE_STATIC_VECTOR_HPP
 #define MINIMOSQ_CORE_STATIC_VECTOR_HPP

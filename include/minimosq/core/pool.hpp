@@ -4,6 +4,31 @@
 // retained messages). Objects keep their address from alloc() to
 // release(), so raw pointers/indices into the pool stay valid.
 //
+// alloc() value-initialises: new (slot) T(). For a T with no
+// user-provided default constructor, value-initialisation itself
+// zero-initialises the object before any constructor or default member
+// initialiser runs. The zeroing is that rule, not a constructor doing
+// the work. It is what the broker relies on: slots are reused, and a
+// session must not start life holding the topic and payload bytes of
+// the client that had the slot before it. The guarantee covers members,
+// not the padding between them, which may still hold what the previous
+// occupant left; nothing here reads padding. A T with a user-provided
+// default constructor gets no zero-initialisation at all — that
+// constructor runs on its own — so a reuser relying on this must check
+// which case its type is in. Note that T() = default; declared in the
+// class is not user-provided and stays in the first case.
+//
+// It costs one zeroing of sizeof(T) per alloc(). Measured with GCC 13 on
+// x86-64, a session at DefaultTraits is a little over 7 KB, so that is
+// roughly 7 KB per CONNECT; the figure moves with the traits, the
+// compiler and the ABI.
+//
+// T must not throw on construction or destruction, and neither must a
+// callable passed to for_each(): both run inside noexcept members, so a
+// throwing one terminates. Within the library the only user-supplied
+// code reaching for_each() is the Observer, whose own contract carries
+// the same requirement.
+//
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_CORE_POOL_HPP
 #define MINIMOSQ_CORE_POOL_HPP
