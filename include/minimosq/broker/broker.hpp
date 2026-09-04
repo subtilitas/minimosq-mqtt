@@ -757,7 +757,7 @@ private:
     // Append a QoS 1/2 delivery to a session's queue and, if the client
     // is online, put it on the wire.
     void enqueue(SessionT& s, StrView topic, ByteSpan payload, QoS eff, bool retain) {
-        // Topic length is no longer a case here: a PUBLISH or will whose
+        // Topic length is not a case here: a PUBLISH or will whose
         // topic exceeds max_topic_len is refused at the point it enters
         // the broker, so every topic that reaches routing fits in owned
         // storage. Payload still can be larger, because QoS 0 delivery is
@@ -890,8 +890,8 @@ private:
 
     // ------------------------------------------------- packet dispatch
 
-    // Returns false to make the frame parser stop feeding us (the
-    // connection is being torn down).
+    // Returns false to make the frame parser stop feeding this
+    // connection (it is being torn down).
     bool on_packet(size_t ci, uint8_t first_byte, ByteSpan body) {
         const Conn& c = conns_[ci];
         const PacketType type = packet_type(first_byte);
@@ -1067,7 +1067,7 @@ private:
                 // come back — and MQTT 3.1.1 gives it no expiry, so
                 // without this the first max_sessions clients to
                 // disconnect lock the broker shut. Break the oldest such
-                // promise rather than refuse the client in front of us.
+                // promise rather than refuse the client presenting it.
                 if (SessionT* victim = oldest_disconnected_session()) {
                     notify_session(EventKind::session_evicted, *victim);
                     sessions_.release(victim);

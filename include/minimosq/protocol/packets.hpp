@@ -280,7 +280,7 @@ inline ByteSpan build_publish(uint8_t* buf, size_t cap, StrView topic, ByteSpan 
     return frame_packet(buf, make_first_byte(PacketType::publish, flags), w.size());
 }
 
-// PUBACK / PUBREC / PUBREL / PUBCOMP / UNSUBACK all carry just a packet
+// PUBACK / PUBREC / PUBREL / PUBCOMP / UNSUBACK all carry only a packet
 // id; PUBREL gets its mandated flag nibble 0x02 [MQTT-3.6.1-1].
 inline ByteSpan build_packet_id_only(uint8_t* buf, size_t cap, PacketType type,
                                      uint16_t packet_id) {

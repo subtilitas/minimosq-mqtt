@@ -21,7 +21,7 @@ public:
     StaticVector() = default;
     ~StaticVector() { clear(); }
 
-    // Element storage is in-object; copying would be easy to add but the
+    // Element storage is in-object; copying could be added but the
     // library never needs it, so it is disabled to prevent accidents.
     StaticVector(const StaticVector&) = delete;
     StaticVector& operator=(const StaticVector&) = delete;

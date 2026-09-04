@@ -45,7 +45,7 @@
 //     observer does changes what the broker then does.
 //
 // Adding a new EventKind is not a breaking change: an observer switching
-// on kind simply does not match the new value. That is why this is one
+// on kind does not match the new value. That is why this is one
 // method with a tagged struct rather than a method per event.
 //
 // SPDX-License-Identifier: MIT
