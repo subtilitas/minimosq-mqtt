@@ -173,10 +173,20 @@ public:
     // disconnect, which publishes the peer's will. Accounting for the
     // growth here turns that into a build failure instead.
     static constexpr size_t record_overhead = engine_record_overhead<Engine>::value;
-    static_assert(BufSize > record_overhead,
-                  "TlsAdapter's BufSize leaves no room for the engine's record overhead");
-    static constexpr size_t out_buf_size =
-        narrower_capacity(BufSize - record_overhead, transport_out_buf_size<RawTransport>::value);
+
+    // Ciphertext has to fit the adapter's scratch and the wrapped
+    // transport's buffer, so the narrower of the two is the real
+    // ciphertext capacity. The overhead comes off that, not off BufSize:
+    // subtracting first and narrowing after publishes the raw
+    // transport's full buffer as plaintext capacity whenever it is the
+    // tighter one, which is exactly the case this accounts for.
+    static constexpr size_t cipher_capacity =
+        narrower_capacity(BufSize, transport_out_buf_size<RawTransport>::value);
+    static_assert(cipher_capacity > record_overhead,
+                  "the ciphertext capacity — the smaller of TlsAdapter's BufSize and the "
+                  "wrapped transport's buffer — leaves no room for the engine's record "
+                  "overhead");
+    static constexpr size_t out_buf_size = cipher_capacity - record_overhead;
 
     explicit TlsAdapter(RawTransport& raw) noexcept : raw_(raw) {}
 
@@ -216,7 +226,10 @@ public:
         if constexpr (engine_has_drain<Engine>::value) {
             for (size_t ci = 0; ci < max_connections; ++ci) {
                 size_t cipher_len = 0;
-                const bool ok = engines_[ci].drain(cipher_, sizeof cipher_, cipher_len);
+                // cipher_len comes from the engine; a value past the
+                // buffer would have raw_.send() read whatever follows it.
+                const bool ok = engines_[ci].drain(cipher_, sizeof cipher_, cipher_len) &&
+                                cipher_len <= sizeof cipher_;
                 if (ok && cipher_len == 0) {
                     continue;  // nothing held
                 }

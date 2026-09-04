@@ -273,7 +273,7 @@ struct BufferingEngine {
     void reset() { held_len = 0; }
 
     bool drain(uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) {
-        cipher_len = held_len < cipher_cap ? held_len : 0;
+        cipher_len = held_len <= cipher_cap ? held_len : 0;
         for (size_t i = 0; i < cipher_len; ++i) {
             cipher[i] = held[i];
         }
@@ -341,6 +341,13 @@ TEST(the_published_buffer_size_accounts_for_record_growth) {
     static_assert(Tls::out_buf_size == 1024 - 8,
                   "the broker must check what a packet may occupy, not the raw scratch");
     CHECK_EQ(Tls::out_buf_size, size_t{1016});
+
+    // When the wrapped transport is the tighter buffer, the overhead
+    // comes off its size, not off the adapter's scratch.
+    using OverNarrow = TlsAdapter<BufferingEngine, NarrowRaw, SmallTraits::max_connections, 4096>;
+    static_assert(OverNarrow::out_buf_size == 64 - 8,
+                  "the wrapped transport's 64-byte ring, less the record overhead");
+    CHECK_EQ(OverNarrow::out_buf_size, size_t{56});
 
     // An engine that declares no overhead publishes the scratch size.
     using Plain = TlsAdapter<NullTlsEngine, RawCapture, SmallTraits::max_connections, 1024>;
