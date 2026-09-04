@@ -520,3 +520,55 @@ TEST(tcp_span_that_still_does_not_fit_after_a_write_is_refused) {
     CHECK_EQ(t.native_handle(0), -1);
     c.close();
 }
+
+// ------------------------------------------------ listener and ring edges
+
+// A second open() used to assign over listen_fd_, leaking the first
+// descriptor and, for a unix socket, leaving its path bound to nothing.
+TEST(a_second_open_releases_the_first_listener) {
+    // Both opens bind loopback explicitly, so the probe below contends
+    // for the same address the transport held rather than for whatever
+    // INADDR_ANY resolves to on the host running this.
+    Transport t;
+    CHECK(t.open(0, "127.0.0.1"));
+    const uint16_t first = t.port();
+    CHECK(first != 0);
+
+    CHECK(t.open(0, "127.0.0.1"));
+    const uint16_t second = t.port();
+    CHECK(second != 0);
+    CHECK(second != first);
+
+    // The first port is listenable again, which it would not be if the
+    // descriptor were still held.
+    int probe = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(probe >= 0);
+    int yes = 1;
+    CHECK(::setsockopt(probe, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(first);
+    const bool bound = ::bind(probe, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) == 0;
+    ::close(probe);
+    CHECK(bound);
+}
+
+// OutRing::consume() is handed the count a write actually took. A count
+// past what is held would wrap the unsigned length and every later read
+// would run off the end; the two fixed-capacity containers guard the
+// same shape, and this one now does too.
+TEST(out_ring_consume_clamps_instead_of_wrapping) {
+    minimosq::OutRing<64> ring;
+    const uint8_t bytes[] = {'a', 'b', 'c'};
+    CHECK(ring.append(minimosq::ByteSpan{bytes, sizeof bytes}));
+    CHECK_EQ(ring.size(), size_t{3});
+
+    ring.consume(100);  // more than is held
+    CHECK_EQ(ring.size(), size_t{0});
+    CHECK(ring.empty());
+
+    // Still usable afterwards.
+    CHECK(ring.append(minimosq::ByteSpan{bytes, sizeof bytes}));
+    CHECK_EQ(ring.size(), size_t{3});
+}

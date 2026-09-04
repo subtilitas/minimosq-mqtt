@@ -65,6 +65,17 @@ public:
             ::unlink(path);
             return false;
         }
+        // A listener already held is released before its record is
+        // overwritten, and its socket file removed with it — otherwise
+        // reopening on a different path leaves the old file on disk with
+        // nothing listening, and the destructor only knows the newest.
+        // Not when the path is the same one: the bind above replaced
+        // that file, so unlinking it would remove the new listener.
+        const bool replacing_same_path = same_path(path, len);
+        this->close_listener();
+        if (!replacing_same_path && path_[0] != '\0') {
+            ::unlink(path_);
+        }
         for (size_t i = 0; i <= len; ++i) {
             path_[i] = path[i];
         }
@@ -73,6 +84,15 @@ public:
     }
 
 private:
+    bool same_path(const char* path, size_t len) const noexcept {
+        for (size_t i = 0; i <= len; ++i) {
+            if (path_[i] != path[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     char path_[sizeof(sockaddr_un{}.sun_path)] = {};
 };
 

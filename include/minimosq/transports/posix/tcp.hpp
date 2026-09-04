@@ -52,6 +52,7 @@ public:
             ::close(fd);
             return false;
         }
+        this->close_listener();  // a second open() must not orphan the first
         this->listen_fd_ = fd;
         // Accepted sockets are TCP: turn Nagle off on each, since the
         // base class already writes each connection once per poll pass.

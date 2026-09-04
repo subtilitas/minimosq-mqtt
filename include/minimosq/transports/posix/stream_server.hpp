@@ -203,6 +203,21 @@ public:
     void stop() noexcept { running_ = 0; }
 
 protected:
+    // Release a listener this transport is already holding. A derived
+    // open() calls this before taking a new one: assigning over
+    // listen_fd_ would leak the descriptor and, for a unix socket, leave
+    // its path on disk with nothing listening. The accept backoff goes
+    // with it — it describes the listener being replaced, and a new one
+    // would otherwise start out paused until that deadline passed.
+    void close_listener() noexcept {
+        if (listen_fd_ >= 0) {
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+        }
+        accept_backoff_armed_ = false;
+        accept_retry_at_ms_ = 0;
+    }
+
     int listen_fd_ = -1;
 
     // Set by a derived class whose accepted sockets are TCP; the option
@@ -219,17 +234,31 @@ private:
     template <typename B>
     void accept_new(B& broker, uint32_t now) {
         accept_backoff_armed_ = false;
-        while (true) {
+        // Bounded like the read loop below: with every slot taken this
+        // accepts and immediately closes, and an unbounded loop would
+        // let a flood of connections hold the pass indefinitely and
+        // starve tick(). No pass can use more than MaxConns slots, and
+        // the listener stays readable, so the rest arrive next pass.
+        //
+        // The bound counts attempts rather than accepted connections, so
+        // a run of transient errors cannot spin here either.
+        for (size_t attempt = 0; attempt < MaxConns; ++attempt) {
             const int fd = ::accept(listen_fd_, nullptr, nullptr);
             if (fd < 0) {
-                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR &&
-                    errno != ECONNABORTED) {
+                // A signal, or a client that went away before it could
+                // be accepted: neither says anything about the ones
+                // queued behind it, so try again within the bound rather
+                // than leaving them until the next pass.
+                if (errno == EINTR || errno == ECONNABORTED) {
+                    continue;
+                }
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     // Hard failure (EMFILE/ENFILE/...): the pending
                     // connection stays in the backlog, so back off.
                     accept_backoff_armed_ = true;
                     accept_retry_at_ms_ = now + 1000;
                 }
-                return;
+                return;  // drained, or backing off
             }
             size_t ci = MaxConns;
             for (size_t i = 0; i < MaxConns; ++i) {

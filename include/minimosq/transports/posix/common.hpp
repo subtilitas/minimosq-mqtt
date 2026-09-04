@@ -82,6 +82,12 @@ public:
     }
 
     void consume(size_t n) noexcept {
+        // len_ is unsigned: consuming more than is held would wrap it to
+        // an enormous length and every later read would run off the end.
+        // The two fixed-capacity containers guard the same shape.
+        if (n > len_) {
+            n = len_;
+        }
         head_ = (head_ + n) % Capacity;
         len_ -= n;
     }
