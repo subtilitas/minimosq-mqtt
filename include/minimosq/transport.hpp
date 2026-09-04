@@ -63,10 +63,12 @@
 //     one Traits::session_expiry_ms measures from — is stamped with the
 //     most recent time the broker was given, so it can be as stale as
 //     one poll pass when a transport reports the close before its
-//     tick(). Both reference transports do. Session expiry is measured
-//     in seconds at least, so the skew does not matter; the ordering
-//     used to pick an eviction victim is a counter, not a clock, and is
-//     unaffected.
+//     tick(). Both reference transports do. The error is bounded by the
+//     interval between calls into the broker, so a session_expiry_ms
+//     comparable to that interval expires up to one interval late; it
+//     is in milliseconds and nothing constrains it to be larger. The
+//     ordering used to pick an eviction victim is a counter, not a
+//     clock, and is unaffected either way.
 //
 //   - A transport may publish `static constexpr size_t max_connections`.
 //     When it does, Broker static_asserts that it is at least

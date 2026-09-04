@@ -4,12 +4,15 @@
 // needs, backed entirely by in-object storage. Never allocates, never
 // throws: push_back/emplace_back report failure instead.
 //
-// T must not throw on default construction, copy construction, move
+// T must not throw on default construction, copy construction,
 // assignment or destruction. The mutators are noexcept and do all four
 // inside themselves — emplace_back() default-constructs, push_back()
-// copy-constructs, remove_ordered() and remove_unordered() move-assign
-// to close the gap, and clear() destroys — so a throwing element type
-// terminates rather than propagating. Every type the library stores here
+// copy-constructs, remove_ordered() and remove_unordered() assign from
+// an rvalue to close the gap, and clear() destroys — so a throwing
+// element type terminates rather than propagating. Assignment covers
+// both operators: an rvalue binds to a copy-assignment operator when
+// the type has no move assignment, so a throwing copy assignment is
+// just as fatal. Every type the library stores here
 // is an aggregate of fixed-size arrays; the requirement is stated for
 // anyone reusing the container.
 //
