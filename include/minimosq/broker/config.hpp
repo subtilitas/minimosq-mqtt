@@ -34,7 +34,18 @@ struct DefaultTraits {
     // answers 0x80 for the excess entries.
     static constexpr size_t max_subscriptions_per_session = 8;
 
-    // Longest accepted topic name / topic filter, in bytes.
+    // Longest accepted topic name / topic filter, in bytes. The one
+    // bound with four different consequences, because a filter can be
+    // refused per entry and a topic cannot:
+    //   - SUBSCRIBE filter too long: 0x80 for that entry, connection
+    //     survives, the rest of the packet is granted normally.
+    //   - PUBLISH topic too long: protocol_violation with Err::oversize
+    //     and the connection closes. 3.1.1 has no per-message refusal,
+    //     and a topic the broker cannot own could not be retained or
+    //     queued, so half-delivering it is the worse answer.
+    //   - Will topic too long: CONNACK 0x03, at CONNECT.
+    //   - Broker::publish() with too long a topic: Err::oversize, no
+    //     delivery.
     static constexpr size_t max_topic_len = 128;
 
     // Longest accepted client identifier, in bytes. Longer ids are

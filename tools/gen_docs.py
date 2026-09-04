@@ -37,6 +37,7 @@ CURATED = [
     ("docs/observability.md", "Observability", "Observability"),
     ("docs/porting.md", "Porting", "Porting guide"),
     ("docs/design.md", "Design-Notes", "Design notes"),
+    ("docs/testing.md", "Testing", "Testing"),
 ]
 
 # Sidebar order; derived pages are inserted at their position.
@@ -51,6 +52,7 @@ SIDEBAR = [
     ("Porting", "Porting"),
     ("API-Reference", "API reference"),
     ("Design-Notes", "Design notes"),
+    ("Testing", "Testing"),
 ]
 
 # Repository paths that become wiki pages, for link rewriting.
