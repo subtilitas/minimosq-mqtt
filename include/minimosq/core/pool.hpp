@@ -22,9 +22,9 @@
 //
 // T must not throw on construction or destruction, and neither must a
 // callable passed to for_each(): both run inside noexcept members, so a
-// throwing one terminates. The Observer, the only user-supplied callable
-// that reaches for_each(), is required to be noexcept by its own
-// contract.
+// throwing one terminates. Within the library the only user-supplied
+// code reaching for_each() is the Observer, whose own contract carries
+// the same requirement.
 //
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_CORE_POOL_HPP

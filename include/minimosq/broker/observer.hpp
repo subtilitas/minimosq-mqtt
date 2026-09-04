@@ -39,6 +39,9 @@
 //     Republishing an event to an audit topic is the obvious way to hit
 //     this. Queue it and publish from your own loop instead. Nothing
 //     enforces the rule: it is a contract, not a guard.
+//   * on_event() must not throw. It is reached through members the
+//     broker declares noexcept, including the loop over sessions, so an
+//     exception leaving it terminates rather than propagating.
 //   * Every StrView in an Event borrows broker-owned storage and is
 //     valid only for the duration of the call.
 //   * Events are notifications, not a control point. Nothing the
