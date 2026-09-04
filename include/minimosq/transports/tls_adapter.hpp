@@ -203,14 +203,31 @@ public:
 
     // Write out whatever the engines are holding. A no-op for engines
     // that do not offer drain(), which are the ones that never buffer.
-    void drain_engines() {
+    //
+    // Both failures here end the connection. A drain() refusal is a
+    // fatal TLS error by the same rule as on_ciphertext(). A refused
+    // write is worse than a dropped packet: the record has already left
+    // the engine and cannot be put back, so the peer's stream would
+    // resume mid-record. Reporting it from here is safe — this runs from
+    // the driver's tick(), not from inside send(), so nothing is
+    // iterating the broker's sessions.
+    template <typename B>
+    void drain_engines(B& broker) {
         if constexpr (engine_has_drain<Engine>::value) {
             for (size_t ci = 0; ci < max_connections; ++ci) {
                 size_t cipher_len = 0;
-                if (engines_[ci].drain(cipher_, sizeof cipher_, cipher_len) && cipher_len > 0) {
-                    raw_.send(ci, ByteSpan{cipher_, cipher_len});
+                const bool ok = engines_[ci].drain(cipher_, sizeof cipher_, cipher_len);
+                if (ok && cipher_len == 0) {
+                    continue;  // nothing held
                 }
+                if (ok && raw_.send(ci, ByteSpan{cipher_, cipher_len})) {
+                    continue;
+                }
+                raw_.close(ci);
+                broker.conn_closed(ci);  // the transport has already closed it
             }
+        } else {
+            (void)broker;
         }
     }
 
@@ -276,7 +293,7 @@ public:
             // A record the engine buffered has no other way out: nothing
             // else asks it for output, and on_ciphertext() only runs when
             // the peer sends more bytes.
-            tls.drain_engines();
+            tls.drain_engines(broker);
             broker.tick(now_ms);
         }
     };

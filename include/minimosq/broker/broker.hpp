@@ -388,7 +388,7 @@ private:
     // max_connections; going through here states that range once, for
     // the reader and for the optimiser — GCC cannot otherwise prove the
     // index at -O2 and -Warray-bounds rejects the inlined access.
-    Conn* conn_of_session(const SessionT& s) noexcept {
+    const Conn* conn_of_session(const SessionT& s) const noexcept {
         const size_t ci = conn_index(s);
         return ci < max_connections ? &conns_[ci] : nullptr;
     }

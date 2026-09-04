@@ -308,6 +308,32 @@ TEST(a_buffered_record_is_drained_rather_than_stranded) {
     CHECK(raw.logs[0].len > 0);
 }
 
+// A drain() refusal is a fatal TLS error, and a write the raw transport
+// refuses has already taken the record out of the engine — the peer's
+// stream would resume mid-record. Both end the connection rather than
+// losing bytes quietly.
+namespace {
+struct FailingDrainEngine : BufferingEngine {
+    bool drain(uint8_t*, size_t, size_t& cipher_len) {
+        cipher_len = 0;
+        return false;  // fatal
+    }
+};
+}  // namespace
+
+TEST(a_failed_drain_closes_the_connection) {
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<FailingDrainEngine, RawCapture, SmallTraits::max_connections>;
+    RawCapture raw;
+    Tls tls{raw};
+    Broker<SmallTraits, Tls> b{tls};
+    auto driver = tls.driver(b);
+
+    CHECK(driver.conn_open(0, 1000) == Err::ok);
+    driver.tick(1100);
+    CHECK(raw.logs[0].closed);  // not left half-open with bytes lost
+}
+
 TEST(the_published_buffer_size_accounts_for_record_growth) {
     using RawCapture = CaptureTransport<SmallTraits::max_connections>;
     using Tls = TlsAdapter<BufferingEngine, RawCapture, SmallTraits::max_connections, 1024>;
