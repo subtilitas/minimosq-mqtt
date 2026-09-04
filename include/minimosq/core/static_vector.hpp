@@ -13,9 +13,9 @@
 // element type terminates rather than propagating. Assignment covers
 // both operators: an rvalue binds to a copy-assignment operator when
 // the type has no move assignment, so a throwing copy assignment is
-// just as fatal. Every type the library stores here
-// is an aggregate of fixed-size arrays; the requirement is stated for
-// anyone reusing the container.
+// just as fatal. The library stores scalars and aggregates of
+// fixed-size arrays here, none of which can throw; the requirement is
+// stated for anyone reusing the container.
 //
 // Known deviation: ptr() launders the address of a slot whether or not
 // an object is live in it, and begin()/end() form that address on an
