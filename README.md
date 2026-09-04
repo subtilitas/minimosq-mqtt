@@ -197,12 +197,16 @@ mosquitto_pub -p 1883 -q 2 -t demo/hello -m 'hi' -r
 
 ## Testing and coverage
 
-217 test cases across the protocol, broker, ACL and transport layers,
+260 test cases across the protocol, broker, ACL and transport layers,
 run on every push under GCC and Clang, 32-bit and MSVC, plus
 AddressSanitizer + UndefinedBehaviorSanitizer and an end-to-end smoke
 test against stock `mosquitto` clients. The whole repository builds
 warning-free with `-Wall -Wextra -Wpedantic -Wconversion
 -Wsign-conversion -Wshadow -Werror`.
+
+[docs/testing.md](docs/testing.md) records what 1.0.0 was tested with in
+full, including the independent suite and interop runs, and what is not
+covered.
 
 Static analysis runs separately ([`analysis.yml`](.github/workflows/analysis.yml)):
 CodeQL with the `security-and-quality` queries, clang-tidy against the
