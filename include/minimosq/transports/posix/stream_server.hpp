@@ -239,17 +239,26 @@ private:
         // let a flood of connections hold the pass indefinitely and
         // starve tick(). No pass can use more than MaxConns slots, and
         // the listener stays readable, so the rest arrive next pass.
-        for (size_t accepted = 0; accepted < MaxConns; ++accepted) {
+        //
+        // The bound counts attempts rather than accepted connections, so
+        // a run of transient errors cannot spin here either.
+        for (size_t attempt = 0; attempt < MaxConns; ++attempt) {
             const int fd = ::accept(listen_fd_, nullptr, nullptr);
             if (fd < 0) {
-                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR &&
-                    errno != ECONNABORTED) {
+                // A signal, or a client that went away before it could
+                // be accepted: neither says anything about the ones
+                // queued behind it, so try again within the bound rather
+                // than leaving them until the next pass.
+                if (errno == EINTR || errno == ECONNABORTED) {
+                    continue;
+                }
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     // Hard failure (EMFILE/ENFILE/...): the pending
                     // connection stays in the backlog, so back off.
                     accept_backoff_armed_ = true;
                     accept_retry_at_ms_ = now + 1000;
                 }
-                return;
+                return;  // drained, or backing off
             }
             size_t ci = MaxConns;
             for (size_t i = 0; i < MaxConns; ++i) {
