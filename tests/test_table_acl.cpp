@@ -251,8 +251,12 @@ TEST(an_empty_password_opens_only_the_account_registered_with_one) {
     CHECK(acl.authenticate("c", &nopw, nullptr, ctx) == ConnackCode::accepted);
     CHECK_EQ(ctx.role, ROLE_DASH);
 
+    // An empty supplied password is the same credential as none at all,
+    // and it must set the role rather than leave whatever was there.
     const ByteSpan empty = ByteSpan{};
+    ctx.role = 0;
     CHECK(acl.authenticate("c", &nopw, &empty, ctx) == ConnackCode::accepted);
+    CHECK_EQ(ctx.role, ROLE_DASH);
 
     // A real credential is not opened by omitting the password.
     const StrView sensor = "sensor-1";
@@ -262,4 +266,5 @@ TEST(an_empty_password_opens_only_the_account_registered_with_one) {
     // And an unregistered username is refused with or without one.
     const StrView ghost = "ghost";
     CHECK(acl.authenticate("c", &ghost, nullptr, ctx) == ConnackCode::bad_credentials);
+    CHECK(acl.authenticate("c", &ghost, &empty, ctx) == ConnackCode::bad_credentials);
 }

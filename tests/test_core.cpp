@@ -284,7 +284,9 @@ TEST(pool_alloc_zeroes_a_slot_the_previous_occupant_wrote) {
         unsigned char bytes[8];
         int n;
     };
-    Pool<Payload, 2> p;
+    // Capacity 1, so reuse of the same storage is the pool's own
+    // contract rather than an artefact of which slot alloc() picks.
+    Pool<Payload, 1> p;
     Payload* first = p.alloc();
     CHECK(first != nullptr);
     for (unsigned char& b : first->bytes) {
@@ -306,12 +308,16 @@ TEST(pool_for_each_is_noexcept) {
     // this member being noexcept rather than to the broker's entry
     // points, which are not. If for_each ever stops being noexcept that
     // justification goes with it.
+    // The visitor is deliberately not noexcept: a for_each that became
+    // conditionally noexcept — noexcept(noexcept(f(...))) — would still
+    // satisfy this assertion with a noexcept visitor, and the contract
+    // is that for_each swallows the question whatever it is handed.
     Pool<int, 1> p;
-    const auto visit = [](int&) noexcept {};
-    static_assert(noexcept(p.for_each(visit)), "Pool::for_each must stay noexcept");
+    const auto visit = [](int&) {};
+    static_assert(noexcept(p.for_each(visit)), "Pool::for_each must stay unconditionally noexcept");
     *p.alloc() = 7;
     int seen = 0;
-    p.for_each([&](int& v) noexcept { seen += v; });
+    p.for_each([&](int& v) { seen += v; });
     CHECK_EQ(seen, 7);
 }
 
