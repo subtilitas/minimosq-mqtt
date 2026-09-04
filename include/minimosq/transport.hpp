@@ -18,6 +18,22 @@
 //       // queue flush on reconnect — a refusal only says the broker
 //       // outran the buffer, so it pauses and resumes on a later pass
 //       // rather than punishing the peer for it.
+//       //
+//       // Do NOT call back into the broker from here, conn_closed()
+//       // included. send() runs inside the loop over sessions that
+//       // routes a publish, and inside the queue flush, both of which
+//       // hold a reference to the session being served; conn_closed()
+//       // runs the deferred teardown, which can release that session
+//       // and leave the caller reading an object that no longer
+//       // exists.
+//       //
+//       // A peer found dead while sending is reported the same way as
+//       // any other refusal: return false. What follows depends on what
+//       // the broker was sending, per the paragraph above — ordinary
+//       // traffic drops the connection, a self-generated burst paces
+//       // and tries again. A transport that must not be asked again
+//       // closes the connection on its own next pass and reports it
+//       // through conn_closed() from there, not from inside send().
 //       bool send(size_t conn, minimosq::ByteSpan bytes);
 //
 //       // Tear a connection down (broker-initiated). Free the slot and
@@ -49,9 +65,11 @@
 //
 //   - A transport that buffers outbound bytes may publish
 //     `static constexpr size_t out_buf_size`. When it does, Broker
-//     static_asserts that it is at least Traits::max_packet_size: a
-//     buffer smaller than one packet can never send that packet, to any
-//     peer, at any speed, so send() would fail forever rather than
+//     static_asserts that it is at least Broker::out_size — the framed
+//     size of the widest packet the broker builds, which is more than
+//     Traits::max_packet_size, that being a bound on an inbound body.
+//     A buffer smaller than one packet can never send that packet, to
+//     any peer, at any speed, so send() would fail forever rather than
 //     transiently.
 //
 // See transports/posix/ for reference implementations (TCP, unix
