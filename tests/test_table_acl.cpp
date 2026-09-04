@@ -214,3 +214,57 @@ TEST(table_acl_matches_usernames_exactly) {
     const StrView empty = StrView{"", 0};
     CHECK(acl.authenticate("cid", &empty, &pw, ctx) == ConnackCode::bad_credentials);
 }
+
+// An empty password is a usable credential. table_acl.hpp,
+// docs/security.md and SECURITY.md all state this, and it is deliberate
+// rather than a defect — an operator who registers one has chosen it.
+// Only add_user()'s return value was pinned before, which says nothing
+// about what the credential then admits.
+TEST(an_empty_password_authenticates_on_the_username_alone) {
+    BedT<Acl> x;
+    CHECK(x.b.security().add_user("nopw", "", ROLE_DASH));
+    CHECK(x.b.security().add_rule(ROLE_DASH, "sensors/#", Acl::read));
+
+    // No password field in the CONNECT at all, not an empty one.
+    wire::ConnectOpts o;
+    o.username = "nopw";
+    x.connect(0, "c0", o);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    // The role really is the registered one, not some default: the
+    // subscription inside its grant is granted.
+    x.feed(0, wire::make_subscribe(1, {{"sensors/#", 0}}));
+    const uint8_t codes[] = {0x00};
+    expect_suback(x.t, 0, 1, codes);
+}
+
+// The other half of the same rule: an empty *supplied* password does not
+// open a credential that has a real one, and the empty stored secret is
+// still bound to its own username.
+TEST(an_empty_password_opens_only_the_account_registered_with_one) {
+    Acl acl;
+    CHECK(acl.add_user("nopw", "", ROLE_DASH));
+    CHECK(acl.add_user("sensor-1", "s3cret", ROLE_SENSOR));
+    Acl::Context ctx;
+
+    const StrView nopw = "nopw";
+    CHECK(acl.authenticate("c", &nopw, nullptr, ctx) == ConnackCode::accepted);
+    CHECK_EQ(ctx.role, ROLE_DASH);
+
+    // An empty supplied password is the same credential as none at all,
+    // and it must set the role rather than leave whatever was there.
+    const ByteSpan empty = ByteSpan{};
+    ctx.role = 0;
+    CHECK(acl.authenticate("c", &nopw, &empty, ctx) == ConnackCode::accepted);
+    CHECK_EQ(ctx.role, ROLE_DASH);
+
+    // A real credential is not opened by omitting the password.
+    const StrView sensor = "sensor-1";
+    CHECK(acl.authenticate("c", &sensor, nullptr, ctx) == ConnackCode::bad_credentials);
+    CHECK(acl.authenticate("c", &sensor, &empty, ctx) == ConnackCode::bad_credentials);
+
+    // And an unregistered username is refused with or without one.
+    const StrView ghost = "ghost";
+    CHECK(acl.authenticate("c", &ghost, nullptr, ctx) == ConnackCode::bad_credentials);
+    CHECK(acl.authenticate("c", &ghost, &empty, ctx) == ConnackCode::bad_credentials);
+}
