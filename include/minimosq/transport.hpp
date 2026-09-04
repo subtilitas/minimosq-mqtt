@@ -61,18 +61,18 @@
 //
 //   - conn_closed() takes no timestamp. The disconnect it records — the
 //     one Traits::session_expiry_ms measures from — is stamped with the
-//     most recent time the broker was given, so it can be as stale as
-//     one poll pass when a transport reports the close before its
-//     tick(). Both reference transports do. The error is bounded by the
-//     interval between the calls that record the clock — conn_data()
-//     and tick() — since conn_closed() carries no timestamp of its own.
-//     It runs one way: the stamp is at or before the real close, never
-//     after it, so the expiry deadline it produces is early by up to
-//     that interval, never late. A session_expiry_ms comparable to the
-//     interval is therefore the case to watch; it is in milliseconds
-//     and nothing constrains it to be larger. The ordering used to pick
-//     an eviction victim is a counter, not a clock, and is unaffected
-//     either way.
+//     most recent time the broker was given, so the error is bounded by
+//     the interval between the calls that record the clock, conn_data()
+//     and tick(). Which way it runs is the transport's ordering.
+//     Reporting the close before the next timestamped call — what both
+//     reference transports do, one poll pass — leaves the stamp at or
+//     before the real close, so the expiry deadline is early by up to
+//     that interval. Calling tick() first, after the peer has already
+//     gone, stamps the close late by the same bound. A
+//     session_expiry_ms comparable to the interval is the case to watch
+//     either way; it is in milliseconds and nothing constrains it to be
+//     larger. The ordering used to pick an eviction victim is a
+//     counter, not a clock, and is unaffected.
 //
 //   - A transport may publish `static constexpr size_t max_connections`.
 //     When it does, Broker static_asserts that it is at least
