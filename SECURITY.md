@@ -81,8 +81,8 @@ to exploit one *beyond* what is described here does.
 [docs/code-review.md](docs/code-review.md) carries the full audit record,
 including a ranked list of confirmed issues. Its preface names the
 entries closed since that pass — one of them only in part — and each of
-those names the commit that closed it. The rest are open. Please check it
-before reporting; if you find something already on that list, a note
+those names the commits that closed it. The rest are open. Please check
+it before reporting; if you find something already on that list, a note
 about impact that list underrates is still worth sending.
 
 ## Scope of the threat model

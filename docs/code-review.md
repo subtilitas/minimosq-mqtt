@@ -508,7 +508,7 @@ observable from a later subscriber rather than only from
 
 Confirmed and deliberately left as of this pass. Three of them — 1 in
 part, 5 and 7 in full — were closed by the pre-1.0 full-tree review;
-each entry says so and names the commit. The rest still stand.
+each entry says so and names the commits. The rest still stand.
 
 1. **No TLS engine, and `NullTlsEngine` can ship as one with no signal.**
    Wired exactly as `tls.md` documents, a raw MQTT CONNECT (no
