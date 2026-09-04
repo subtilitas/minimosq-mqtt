@@ -506,8 +506,9 @@ observable from a later subscriber rather than only from
 
 ## Not addressed here — known, ranked
 
-Confirmed and deliberately left. These are the next round, not
-oversights.
+Confirmed and deliberately left as of this pass. Three of them — 1 in
+part, 5 and 7 in full — were closed by the pre-1.0 full-tree review;
+each entry says so and names the commits. The rest still stand.
 
 1. **No TLS engine, and `NullTlsEngine` can ship as one with no signal.**
    Wired exactly as `tls.md` documents, a raw MQTT CONNECT (no
@@ -520,6 +521,17 @@ oversights.
    `close_notify` is ever sent, and `BufSize` must exceed the plaintext
    by the record overhead or `encrypt()` fails — which the broker treats
    as an abnormal disconnect, firing the will.
+
+   Two of those are closed. `TlsAdapter::drain_engines()` writes out
+   what each open engine is holding, once per `tick()` per connection
+   (`8c89dcb`, `ad988aa`), so buffered records are no longer stranded;
+   a refused drain or write ends the connection (`ad345df`). The record
+   overhead now comes off the published `out_buf_size` under a
+   `static_assert` (`5df9b6a`), so a too-narrow buffer fails to compile
+   rather than firing a will at run time. Still open: nothing gates
+   `NullTlsEngine` from shipping as a TLS engine, `reset()` runs at
+   `conn_open()` rather than at close so keys outlive the connection,
+   and no `close_notify` is sent.
 2. **Keep-alive is refreshed by bytes, not Control Packets.** One body
    byte per window holds a connection open indefinitely (measured: 580 s,
    never closed). [MQTT-3.1.2-24] speaks of a Control Packet, and there
@@ -538,14 +550,28 @@ oversights.
    their will.** Paho defaults to 10 in-flight, `mosquitto_pub` to 20.
    For a persistent session the id table survives the reconnect, so every
    reconnect is dropped again on the first new id.
+
+   Closed in `9bb228a`: a full table evicts the oldest identifier and
+   raises `inbound_qos2_evicted` instead of dropping the client. The
+   forgotten identifier is no longer deduplicated, so exactly-once
+   degrades to at-least-once for it — under a condition the client
+   created by leaving more than `max_inbound_qos2` QoS 2 publishes
+   unreleased.
 6. **`TableAcl` has no rotation or revocation** — no `remove_user`, no
    `set_password`, and duplicates are rejected, so a credential is
    immutable for the process lifetime. It also accepts an empty password,
-   after which the client may omit the password field entirely.
+   after which the client may omit the password field entirely. That
+   second part is an operator's configuration choice and stays; it is
+   documented in `table_acl.hpp`, `docs/security.md` and `SECURITY.md`
+   as of `c4f0c60` rather than only here.
 7. **The username comparison is a prefix oracle** — roughly 1.08 cycles
    per matching byte, measured over 2M interleaved samples. The password
    comparison is genuinely constant-time; `security.md` now claims only
    that.
+
+   Closed in `dfae02f`: the username is compared with `constant_time_eq`
+   as well, so neither comparison has a data-dependent early exit. A
+   length difference remains observable in both.
 8. **`PipeTransport::flush()` uses `write(2)` with no SIGPIPE
    handling** — measured: the process is killed. The examples set
    `SIG_IGN`; the header never says it is required. The same hazard
