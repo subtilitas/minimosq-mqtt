@@ -64,9 +64,11 @@
 //     most recent time the broker was given, so it can be as stale as
 //     one poll pass when a transport reports the close before its
 //     tick(). Both reference transports do. The error is bounded by the
-//     interval between calls into the broker, so a session_expiry_ms
-//     comparable to that interval expires up to one interval late; it
-//     is in milliseconds and nothing constrains it to be larger. The
+//     interval between the calls that carry a timestamp — conn_open(),
+//     conn_data() and tick() — since conn_closed() is itself one that
+//     does not. A session_expiry_ms comparable to that interval expires
+//     up to one interval late; it is in milliseconds and nothing
+//     constrains it to be larger. The
 //     ordering used to pick an eviction victim is a counter, not a
 //     clock, and is unaffected either way.
 //

@@ -5,12 +5,15 @@
 // release(), so raw pointers/indices into the pool stay valid.
 //
 // alloc() value-initialises. For a T with no user-provided default
-// constructor — which is every type stored here — that zeroes the slot
-// before the object's own initialisers run, and the zeroing is the
+// constructor — which is every type stored here — that zero-initialises
+// the object's members before its own initialisers run, and that is the
 // point: slots are reused, and a session must not start life holding
 // the topic and payload bytes of the client that had the slot before
-// it. A T that does provide a default constructor gets no such
-// zeroing, so a reuser relying on this must keep that in mind.
+// it. The guarantee covers members, not padding between them, which may
+// still hold what the previous occupant left; nothing here reads
+// padding. A T that does provide a default constructor gets no
+// zero-initialisation at all, so a reuser relying on this must keep
+// that in mind.
 //
 // It costs one zeroing of sizeof(T) per alloc(). Measured with GCC 13 on
 // x86-64, a session at DefaultTraits is a little over 7 KB, so that is
