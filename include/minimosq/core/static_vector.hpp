@@ -4,9 +4,10 @@
 // needs, backed entirely by in-object storage. Never allocates, never
 // throws: push_back/emplace_back report failure instead.
 //
-// T must not throw on default construction, copy construction,
+// T must not throw on value-initialisation, copy construction,
 // assignment or destruction. The mutators are noexcept and do all four
-// inside themselves — emplace_back() default-constructs, push_back()
+// inside themselves — emplace_back() value-initialises with T(), which
+// zeroes a scalar rather than leaving it indeterminate, push_back()
 // copy-constructs, remove_ordered() and remove_unordered() assign from
 // an rvalue to close the gap, and clear() destroys — so a throwing
 // element type terminates rather than propagating. Assignment covers
