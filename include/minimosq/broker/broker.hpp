@@ -1145,8 +1145,8 @@ private:
                     // never. The cost is that the forgotten id is no
                     // longer deduplicated — exactly-once degrades to
                     // at-least-once for it, under a condition the client
-                    // created by leaving max_inbound_qos2 QoS 2
-                    // publishes unreleased.
+                    // created by leaving more than max_inbound_qos2
+                    // QoS 2 publishes unreleased.
                     notify_conn(EventKind::inbound_qos2_evicted, ci);
                     s.inbound_qos2.remove_ordered(0);  // the oldest
                 }

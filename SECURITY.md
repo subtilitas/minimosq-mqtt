@@ -79,10 +79,11 @@ to exploit one *beyond* what is described here does.
   Every such decision is reported through the `Observer` policy.
 
 [docs/code-review.md](docs/code-review.md) carries the full audit record,
-including a ranked list of confirmed issues. An entry closed since that
-pass carries the commit that closed it; an entry with no such note is
-still open. Please check it before reporting — if you find something already on that list, a note about
-impact that list underrates is still worth sending.
+including a ranked list of confirmed issues. Its preface names the
+entries closed since that pass — one of them only in part — and each of
+those names the commit that closed it. The rest are open. Please check it
+before reporting; if you find something already on that list, a note
+about impact that list underrates is still worth sending.
 
 ## Scope of the threat model
 

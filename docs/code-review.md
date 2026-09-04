@@ -555,7 +555,8 @@ each entry says so and names the commit. The rest still stand.
    raises `inbound_qos2_evicted` instead of dropping the client. The
    forgotten identifier is no longer deduplicated, so exactly-once
    degrades to at-least-once for it — under a condition the client
-   created by leaving `max_inbound_qos2` QoS 2 publishes unreleased.
+   created by leaving more than `max_inbound_qos2` QoS 2 publishes
+   unreleased.
 6. **`TableAcl` has no rotation or revocation** — no `remove_user`, no
    `set_password`, and duplicates are rejected, so a credential is
    immutable for the process lifetime. It also accepts an empty password,
