@@ -105,17 +105,18 @@ Behaviour worth knowing:
   `bad_credentials`. The lookup scans the whole user table and compares
   every stored password whether or not the name matched, so neither the
   response nor the number of password comparisons distinguishes them.
-  **The response, not the response time.** The *username* comparison
-  still short-circuits at the first differing byte, which is measurable
-  in the low tens of CPU cycles — enough, given enough samples on a
-  low-jitter path such as a unix socket or a co-resident attacker, to
-  recover a username byte by byte. It is not reachable across a plant
-  network. If your threat model includes a local attacker, compare
-  usernames with `constant_time_eq` as well, or key on a
-  transport-derived identity instead.
-* **Passwords are compared in constant time.** The comparison has no
-  data-dependent early exit; a *length* difference is still observable,
-  which for passwords is an accepted trade.
+* **Usernames and passwords are both compared in constant time.**
+  Neither comparison has a data-dependent early exit, so how far a guess
+  matches a stored name or secret is not observable in the response time.
+  A *length* difference is: each comparison runs over the shorter of the
+  two, which for credentials is an accepted trade.
+* **An empty password is a usable credential.** `add_user("bob", "", r)`
+  registers one, and a CONNECT that carries the username `bob` with no
+  password field is accepted with role `r` — an absent password arrives
+  as an empty span and matches an empty stored secret. A configuration
+  loader that leaves the password field empty produces this without
+  saying so, so reject an empty password before calling `add_user` if
+  that is not what you mean.
 * **Duplicate usernames are rejected** by `add_user` rather than
   silently shadowed, so a config typo fails loudly at startup.
 * **Subscriptions are checked by filter subsumption**: the requested
