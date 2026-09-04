@@ -3,7 +3,7 @@
 // The broker is parameterized on a Traits type providing the constants
 // below. All storage is sized from these at compile time; the broker
 // performs no allocation, so the memory cost of a configuration is
-// simply sizeof(Broker<Traits, ...>) and can be inspected at build time
+// sizeof(Broker<Traits, ...>), which can be inspected at build time
 // (e.g. with static_assert).
 //
 // Define your own traits struct with the same members to tune capacity;
@@ -24,7 +24,10 @@ struct DefaultTraits {
     static constexpr size_t max_connections = 8;
 
     // MQTT sessions, including disconnected persistent (clean-session=0)
-    // sessions. Must be >= max_connections to accept every connection.
+    // sessions. At least max_connections to give every connection a
+    // session of its own. A smaller value is supported: a CONNECT that
+    // finds the pool full evicts the session disconnected longest, and
+    // is refused with CONNACK 0x03 when every session is connected.
     static constexpr size_t max_sessions = 8;
 
     // Topic filters one session may hold. A SUBSCRIBE beyond this

@@ -2,7 +2,7 @@
 //
 // The listening-socket setup is the only difference between a TCP and
 // a unix-domain-socket MQTT server, so both (tcp.hpp, unix_socket.hpp)
-// derive from this class and just provide open(). Everything here is
+// derive from this class and provide open(). Everything here is
 // nonblocking; each connection owns a fixed output ring for bytes the
 // peer has not accepted yet.
 //
