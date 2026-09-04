@@ -62,9 +62,14 @@ to exploit one *beyond* what is described here does.
   through unchanged — it is not a security boundary, and a deployment
   that ships it has no encryption.
 - **Credentials in `TableAcl` are stored and compared in plain text.**
-  Password comparison is constant-time; the username comparison is not.
+  Both the username and the password comparison are constant-time with
+  respect to their contents; a length difference is still observable.
   Swap in a salted-hash check if plaintext storage does not fit your
   threat model — the policy interface does not care.
+- **An empty password in `TableAcl` is a usable credential.**
+  `add_user("bob", "", role)` registers one, and a CONNECT carrying the
+  username with no password field is accepted. Reject an empty password
+  before calling `add_user` if that is not what the deployment means.
 - **Nothing is zeroized.** Passwords and decrypted plaintext remain in
   `.bss` for the process lifetime.
 - **Capacity behaviour is a documented policy, not a failure.** Which
@@ -76,7 +81,7 @@ to exploit one *beyond* what is described here does.
 [docs/code-review.md](docs/code-review.md) carries the full audit record,
 including a ranked list of issues that are confirmed and deliberately not
 yet fixed. Please check it before reporting — if you find something
-already on that list, a note about impact we have underrated is still
+already on that list, a note about impact that list underrates is still
 worth sending.
 
 ## Scope of the threat model

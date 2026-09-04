@@ -31,6 +31,14 @@
 //     for anything real, and swap the comparison for a salted-hash
 //     check if plaintext storage does not fit your threat model (the
 //     policy interface doesn't care).
+//   - An empty password is a legal credential. add_user(name, "", role)
+//     registers one, and a CONNECT carrying that username with no
+//     password field satisfies it: an absent password reaches
+//     authenticate() as an empty span, and the compare against an empty
+//     stored secret succeeds. Anyone who knows the username then holds
+//     the role. A configuration loader that leaves the password field
+//     empty produces this silently, so reject an empty password in the
+//     caller if it is not what the deployment means.
 //   - Identity is username-based. For client-certificate or
 //     client-id-based identity, write your own policy; this file is
 //     also the worked example for that.
@@ -69,7 +77,9 @@ public:
 
     // False when the table is full, an argument exceeds a capacity, or
     // the username is already registered (a duplicate is almost always a
-    // config typo, and silently keeping the first entry hides it).
+    // config typo, and silently keeping the first entry hides it). An
+    // empty password is accepted and is a usable credential; see the
+    // security notes at the top of this file for what it admits.
     bool add_user(StrView username, StrView password, uint8_t role) {
         if (username.empty() || username.len > MaxNameLen || password.len > MaxSecretLen) {
             return false;
