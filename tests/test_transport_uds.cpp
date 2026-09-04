@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -157,4 +158,38 @@ TEST(uds_socket_mode_is_configurable) {
     struct stat st {};
     CHECK_EQ(::stat(path, &st), 0);
     CHECK_EQ(static_cast<int>(st.st_mode & 0777), 0660);
+}
+
+// A second open() on a different path used to leave the first socket
+// file on disk with nothing listening: path_ was overwritten before the
+// old listener was released, so the destructor only knew the newest.
+TEST(a_second_open_removes_the_socket_file_it_replaces) {
+    char first[] = "/tmp/minimosq_uds_first_XXXXXX";
+    char second[] = "/tmp/minimosq_uds_second_XXXXXX";
+    const int fd_a = ::mkstemp(first);
+    const int fd_b = ::mkstemp(second);
+    CHECK(fd_a >= 0);
+    CHECK(fd_b >= 0);
+    ::close(fd_a);
+    ::close(fd_b);
+    ::unlink(first);  // open() wants the paths free
+    ::unlink(second);
+
+    {
+        minimosq::UnixSocketTransport<4> t;
+        CHECK(t.open(first));
+        struct ::stat st {};
+        CHECK(::stat(first, &st) == 0);  // the socket file exists
+
+        CHECK(t.open(second));
+        CHECK(::stat(second, &st) == 0);  // the new one exists
+        CHECK(::stat(first, &st) != 0);   // and the old one is gone
+        CHECK_EQ(errno, ENOENT);
+
+        // Reopening the same path keeps it: the bind replaced the file.
+        CHECK(t.open(second));
+        CHECK(::stat(second, &st) == 0);
+    }
+    ::unlink(first);
+    ::unlink(second);
 }

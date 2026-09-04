@@ -73,17 +73,6 @@ public:
         }
     }
 
-    // Release a listener this transport is already holding. A derived
-    // open() calls this before taking a new one: assigning over
-    // listen_fd_ would leak the descriptor and, for a unix socket, leave
-    // its path on disk with nothing listening.
-    void close_listener() noexcept {
-        if (listen_fd_ >= 0) {
-            ::close(listen_fd_);
-            listen_fd_ = -1;
-        }
-    }
-
     // ------------------------------------ transport policy (broker-facing)
 
     // Queue bytes; they leave at the end of the current poll pass, or at
@@ -214,6 +203,21 @@ public:
     void stop() noexcept { running_ = 0; }
 
 protected:
+    // Release a listener this transport is already holding. A derived
+    // open() calls this before taking a new one: assigning over
+    // listen_fd_ would leak the descriptor and, for a unix socket, leave
+    // its path on disk with nothing listening. The accept backoff goes
+    // with it — it describes the listener being replaced, and a new one
+    // would otherwise start out paused until that deadline passed.
+    void close_listener() noexcept {
+        if (listen_fd_ >= 0) {
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+        }
+        accept_backoff_armed_ = false;
+        accept_retry_at_ms_ = 0;
+    }
+
     int listen_fd_ = -1;
 
     // Set by a derived class whose accepted sockets are TCP; the option
