@@ -68,6 +68,7 @@ public:
         for (size_t i = 0; i <= len; ++i) {
             path_[i] = path[i];
         }
+        this->close_listener();  // a second open() must not orphan the first
         this->listen_fd_ = fd;
         return true;
     }

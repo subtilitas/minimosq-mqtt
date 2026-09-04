@@ -73,6 +73,17 @@ public:
         }
     }
 
+    // Release a listener this transport is already holding. A derived
+    // open() calls this before taking a new one: assigning over
+    // listen_fd_ would leak the descriptor and, for a unix socket, leave
+    // its path on disk with nothing listening.
+    void close_listener() noexcept {
+        if (listen_fd_ >= 0) {
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+        }
+    }
+
     // ------------------------------------ transport policy (broker-facing)
 
     // Queue bytes; they leave at the end of the current poll pass, or at
@@ -219,7 +230,12 @@ private:
     template <typename B>
     void accept_new(B& broker, uint32_t now) {
         accept_backoff_armed_ = false;
-        while (true) {
+        // Bounded like the read loop below: with every slot taken this
+        // accepts and immediately closes, and an unbounded loop would
+        // let a flood of connections hold the pass indefinitely and
+        // starve tick(). No pass can use more than MaxConns slots, and
+        // the listener stays readable, so the rest arrive next pass.
+        for (size_t accepted = 0; accepted < MaxConns; ++accepted) {
             const int fd = ::accept(listen_fd_, nullptr, nullptr);
             if (fd < 0) {
                 if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR &&
