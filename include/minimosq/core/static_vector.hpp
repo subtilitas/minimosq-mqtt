@@ -4,6 +4,20 @@
 // needs, backed entirely by in-object storage. Never allocates, never
 // throws: push_back/emplace_back report failure instead.
 //
+// T must not throw on construction, copy or destruction. The mutators
+// are noexcept and construct T inside themselves, so a throwing element
+// type terminates rather than propagating. Every type the library stores
+// here is an aggregate of fixed-size arrays; the requirement is stated
+// for anyone reusing the container.
+//
+// Known deviation: ptr() launders the address of a slot whether or not
+// an object is live in it, and begin()/end() form that address on an
+// empty vector. [ptr.launder] requires a live object, so those two cases
+// are undefined by the letter of the standard. They are on the hottest
+// path in the library and no misbehaviour has been observed — the suite
+// runs clean under AddressSanitizer and UndefinedBehaviorSanitizer with
+// -fno-sanitize-recover=all. Recorded rather than papered over.
+//
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_CORE_STATIC_VECTOR_HPP
 #define MINIMOSQ_CORE_STATIC_VECTOR_HPP

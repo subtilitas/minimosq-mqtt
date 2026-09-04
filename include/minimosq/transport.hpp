@@ -49,6 +49,7 @@
 //   broker.conn_open(ci, now_ms);        // after accepting a connection
 //   broker.conn_data(ci, bytes, now_ms); // whenever bytes arrive
 //   broker.conn_closed(ci);              // peer hung up / io error
+//                                        // (no timestamp: see below)
 //   broker.tick(now_ms);                 // periodically (e.g. every 100 ms)
 //
 // Rules:
@@ -57,6 +58,15 @@
 //   - Single-threaded: all calls into one broker must come from the
 //     same thread (or be externally serialized).
 //   - now_ms is a monotonic millisecond clock; wrap-around is handled.
+//
+//   - conn_closed() takes no timestamp. The disconnect it records — the
+//     one Traits::session_expiry_ms measures from — is stamped with the
+//     most recent time the broker was given, so it can be as stale as
+//     one poll pass when a transport reports the close before its
+//     tick(). Both reference transports do. Session expiry is measured
+//     in seconds at least, so the skew does not matter; the ordering
+//     used to pick an eviction victim is a counter, not a clock, and is
+//     unaffected.
 //
 //   - A transport may publish `static constexpr size_t max_connections`.
 //     When it does, Broker static_asserts that it is at least

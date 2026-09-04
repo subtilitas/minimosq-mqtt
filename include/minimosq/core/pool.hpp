@@ -4,6 +4,18 @@
 // retained messages). Objects keep their address from alloc() to
 // release(), so raw pointers/indices into the pool stay valid.
 //
+// alloc() value-initialises, so a slot is zeroed before the object's own
+// initialisers run. That is deliberate: slots are reused, and a session
+// must not start life holding the topic and payload bytes of the client
+// that had the slot before it. It costs one zeroing of sizeof(T) per
+// alloc() — 7,264 bytes for a session at DefaultTraits, once per CONNECT.
+//
+// T must not throw on construction or destruction, and neither must a
+// callable passed to for_each(): both run inside noexcept members, so a
+// throwing one terminates. The Observer, the only user-supplied callable
+// that reaches for_each(), is required to be noexcept by its own
+// contract. The same launder caveat as StaticVector applies to ptr().
+//
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_CORE_POOL_HPP
 #define MINIMOSQ_CORE_POOL_HPP
