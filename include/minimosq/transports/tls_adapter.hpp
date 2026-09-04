@@ -207,6 +207,7 @@ public:
 
     void close(size_t ci) {
         if (ci < max_connections) {
+            engine_open_[ci] = false;
             raw_.close(ci);
         }
     }
@@ -225,6 +226,9 @@ public:
     void drain_engines(B& broker) {
         if constexpr (engine_has_drain<Engine>::value) {
             for (size_t ci = 0; ci < max_connections; ++ci) {
+                if (!engine_open_[ci]) {
+                    continue;  // never opened, or already closed
+                }
                 size_t cipher_len = 0;
                 // cipher_len comes from the engine; a value past the
                 // buffer would have raw_.send() read whatever follows it.
@@ -236,6 +240,7 @@ public:
                 if (ok && raw_.send(ci, ByteSpan{cipher_, cipher_len})) {
                     continue;
                 }
+                engine_open_[ci] = false;
                 raw_.close(ci);
                 broker.conn_closed(ci);  // the transport has already closed it
             }
@@ -262,11 +267,13 @@ public:
                 return Err::state;
             }
             tls.engines_[ci].reset();
+            tls.engine_open_[ci] = true;
             return broker.conn_open(ci, now_ms);
         }
 
         void conn_closed(size_t ci) {
             if (ci < max_connections) {
+                tls.engine_open_[ci] = false;
                 broker.conn_closed(ci);
             }
         }
@@ -321,6 +328,11 @@ private:
     // Sized by the published capacity: an index past it never reaches
     // the wrapped transport, so an engine for it could never be used.
     Engine engines_[max_connections];
+    // An engine is only meaningful between conn_open() and the close
+    // that follows: drain() on a slot that was never opened would read
+    // whatever the engine's default state is, and a refused write there
+    // would close a connection that does not exist.
+    bool engine_open_[max_connections] = {};
     // Shared record scratch; see Driver::conn_data. Only ever live for
     // the duration of one call.
     uint8_t plain_[BufSize];

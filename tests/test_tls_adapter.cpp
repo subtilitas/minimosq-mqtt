@@ -251,7 +251,10 @@ struct BufferingEngine {
     bool on_ciphertext(ByteSpan in, uint8_t* plain, size_t plain_cap, size_t& plain_len, uint8_t*,
                        size_t, size_t& cipher_len) {
         cipher_len = 0;
-        plain_len = in.len < plain_cap ? in.len : plain_cap;
+        if (in.len > plain_cap) {
+            return false;  // as NullTlsEngine does: refuse, never truncate
+        }
+        plain_len = in.len;
         for (size_t i = 0; i < plain_len; ++i) {
             plain[i] = in.data[i];
         }
@@ -259,24 +262,31 @@ struct BufferingEngine {
     }
 
     // Accepts the plaintext and writes nothing: the record is buffered.
+    // Refuses what it cannot hold rather than reporting success for
+    // bytes it dropped, which is the failure this change is about.
     bool encrypt(ByteSpan plain, uint8_t*, size_t, size_t& cipher_len) {
         cipher_len = 0;
-        if (held_len == 0 && plain.len <= sizeof held) {
-            for (size_t i = 0; i < plain.len; ++i) {
-                held[i] = plain.data[i];
-            }
-            held_len = plain.len;
+        if (held_len != 0 || plain.len > sizeof held) {
+            return false;
         }
+        for (size_t i = 0; i < plain.len; ++i) {
+            held[i] = plain.data[i];
+        }
+        held_len = plain.len;
         return true;
     }
 
     void reset() { held_len = 0; }
 
     bool drain(uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) {
-        cipher_len = held_len <= cipher_cap ? held_len : 0;
-        for (size_t i = 0; i < cipher_len; ++i) {
+        cipher_len = 0;
+        if (held_len > cipher_cap) {
+            return false;  // keep the record rather than lose it
+        }
+        for (size_t i = 0; i < held_len; ++i) {
             cipher[i] = held[i];
         }
+        cipher_len = held_len;
         held_len = 0;
         return true;
     }
@@ -353,4 +363,26 @@ TEST(the_published_buffer_size_accounts_for_record_growth) {
     using Plain = TlsAdapter<NullTlsEngine, RawCapture, SmallTraits::max_connections, 1024>;
     static_assert(Plain::out_buf_size == 1024, "nothing to subtract");
     CHECK_EQ(Plain::out_buf_size, size_t{1024});
+}
+
+// tick() runs on every poll pass, including passes with no connection at
+// all. An engine for a slot that was never opened has not been reset, so
+// it must not be asked to drain — and a refusal there must not close a
+// connection that does not exist.
+TEST(idle_ticks_do_not_touch_unopened_engines) {
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<FailingDrainEngine, RawCapture, SmallTraits::max_connections>;
+    RawCapture raw;
+    Tls tls{raw};
+    Broker<SmallTraits, Tls> b{tls};
+    auto driver = tls.driver(b);
+
+    // No connection has ever been opened. FailingDrainEngine would fail
+    // every drain, so any slot touched here would be closed.
+    for (int pass = 0; pass < 3; ++pass) {
+        driver.tick(1000 + static_cast<uint32_t>(pass));
+    }
+    for (size_t ci = 0; ci < SmallTraits::max_connections; ++ci) {
+        CHECK(!raw.logs[ci].closed);
+    }
 }
