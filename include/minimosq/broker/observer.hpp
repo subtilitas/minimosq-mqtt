@@ -39,12 +39,13 @@
 //     Republishing an event to an audit topic is the obvious way to hit
 //     this. Queue it and publish from your own loop instead. Nothing
 //     enforces the rule: it is a contract, not a guard.
-//   * on_event() must not throw. The broker's entry points are not
+//   * on_event() must not throw. The broker's own entry points are not
 //     noexcept, but some of the paths that reach on_event() run inside
-//     Pool::for_each(), which is — the loop over sessions that routes a
-//     publish is one — and an exception leaving on_event() there
-//     terminates rather than propagating. The requirement covers every
-//     event, since an observer cannot tell which path raised one.
+//     Pool::for_each(), which is noexcept — the loop over sessions that
+//     routes a publish is one — so an exception leaving on_event() on
+//     such a path terminates rather than propagating. The requirement
+//     covers every event: an observer cannot tell which path raised
+//     one.
 //   * Every StrView in an Event borrows broker-owned storage and is
 //     valid only for the duration of the call.
 //   * Events are notifications, not a control point. Nothing the
