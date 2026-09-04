@@ -27,7 +27,7 @@ Fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(minimosq
   GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
-  GIT_TAG v0.6.2)
+  GIT_TAG v1.0.0)
 FetchContent_MakeAvailable(minimosq)
 target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
@@ -40,14 +40,16 @@ target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
 
 The pinned tag is
-[0.6.2](https://github.com/subtilitas/minimosq-mqtt/releases/tag/v0.6.2),
-the newest stable release; against that tag the request is
-`find_package(minimosq 0.6 REQUIRED)`. The `1.0` request is for an
-installed build of this tree, which reports 1.0.0. The
-[v1.0.0-rc1](https://github.com/subtilitas/minimosq-mqtt/releases/tag/v1.0.0-rc1)
-tag exists but has known defects listed on its release page, including
-one that disconnects a subscriber under stock traits; it is not a
-suitable pin.
+[1.0.0](https://github.com/subtilitas/minimosq-mqtt/releases/tag/v1.0.0),
+the newest stable release, and `find_package(minimosq 1.0 REQUIRED)`
+matches it. Compatibility is `SameMajorVersion`, so a 1.0 request
+accepts any 1.x: from 1.0 on a minor release adds to the interface and
+keeps what it already shipped.
+
+The two 1.0.0 release candidates are superseded. `v1.0.0-rc1` in
+particular has known defects listed on its release page, including one
+that disconnects a subscriber under stock traits; neither is a suitable
+pin.
 
 `minimosq::minimosq` is an INTERFACE target: it contributes the include
 path and a C++17 requirement, nothing else.

@@ -604,4 +604,5 @@ Three items from this list were done for the v0.5.0 release:
   `find_package`" described something that did not exist. Verified by
   installing to a prefix and building a consumer against it.
   `SameMinorVersion` compatibility, because 0.6 and 0.7 are not promised
-  to be interchangeable.
+  to be interchangeable. (Changed to `SameMajorVersion` at 1.0, where a
+  minor release adds to the interface and keeps what it shipped.)
