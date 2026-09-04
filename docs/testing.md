@@ -155,9 +155,9 @@ confirmed byte-identical to `git archive` of the tag across all 28
 headers, and then used to build another project's broker with no edits.
 
 The same checks pass on the 1.0.0 artifact.
-`minimosq-1.0.0-headers.tar.gz` has sha256
+`minimosq-1.0.0-headers.tar.gz` has SHA-256
 `cb66c6c0a7336057ff25470593a1c051e50c1c28951eee69700a2d38a165eb9b`,
-matches the shipped `.sha256`, carries 28 headers byte-identical to the
+matches the shipped `.sha256` file, carries 28 headers byte-identical to the
 tree at `v1.0.0`, reports `MINIMOSQ_VERSION` 1.0.0, and compiles a broker
 as a vendored copy under `-Wall -Wextra -Werror`.
 
