@@ -274,6 +274,47 @@ TEST(pool_release_of_a_foreign_pointer_is_a_noop) {
     CHECK_EQ(p.size(), 0u);
 }
 
+TEST(pool_alloc_zeroes_a_slot_the_previous_occupant_wrote) {
+    // pool.hpp presents the zeroing as a safety property: slots are
+    // reused, and a session must not start life holding the bytes of the
+    // client that had the slot before it. The rule doing the work is
+    // value-initialisation of a T with no user-provided default
+    // constructor, so the T here is an aggregate.
+    struct Payload {
+        unsigned char bytes[8];
+        int n;
+    };
+    Pool<Payload, 2> p;
+    Payload* first = p.alloc();
+    CHECK(first != nullptr);
+    for (unsigned char& b : first->bytes) {
+        b = 0xAB;
+    }
+    first->n = 12345;
+    p.release(first);
+
+    Payload* reused = p.alloc();
+    CHECK(reused == first);  // the same storage, with the old bytes under it
+    for (const unsigned char b : reused->bytes) {
+        CHECK_EQ(b, 0u);
+    }
+    CHECK_EQ(reused->n, 0);
+}
+
+TEST(pool_for_each_is_noexcept) {
+    // observer.hpp attributes the observer's no-throw requirement to
+    // this member being noexcept rather than to the broker's entry
+    // points, which are not. If for_each ever stops being noexcept that
+    // justification goes with it.
+    Pool<int, 1> p;
+    const auto visit = [](int&) noexcept {};
+    static_assert(noexcept(p.for_each(visit)), "Pool::for_each must stay noexcept");
+    *p.alloc() = 7;
+    int seen = 0;
+    p.for_each([&](int& v) noexcept { seen += v; });
+    CHECK_EQ(seen, 7);
+}
+
 TEST(pool_release_runs_the_destructor_exactly_once) {
     static int dtors = 0;
     struct Counted {

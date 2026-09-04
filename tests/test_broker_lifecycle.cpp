@@ -157,6 +157,76 @@ TEST(session_expiry_reclaims_before_the_pool_fills) {
     expect_connack(x.t, 1, /*session_present=*/false, ConnackCode::accepted);
 }
 
+// conn_closed() carries no timestamp, so teardown() stamps disconnect_ms
+// with the most recent clock the broker was given — by conn_data() or
+// tick(), the only two calls that record one. transport.hpp bounds the
+// error by the interval between those calls and says the *direction* is
+// the transport's ordering, not the broker's. Both orderings are pinned
+// here: reading it as one-directional is wrong in the second case.
+
+TEST(a_close_reported_before_the_next_tick_stamps_the_disconnect_early) {
+    // What both reference transports do. The broker last saw the clock
+    // at the CONNECT; the peer goes away 5 s later; the transport
+    // reports it before handing the broker a newer time.
+    BedT<AllowAllSecurity, Recorder, ExpiringTraits> x;
+    const uint32_t connected_at = x.now;  // 1000
+    const uint32_t lag_ms = 5000;
+
+    wire::ConnectOpts o;
+    o.clean = false;
+    o.keepalive_s = 0;
+    x.connect(0, "gone", o);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    x.now += lag_ms;     // the real close, which the broker is not told
+    x.b.conn_closed(0);  // no timestamp: stamped connected_at
+
+    const uint32_t stamped_deadline = connected_at + ExpiringTraits::session_expiry_ms;
+    const uint32_t true_deadline = connected_at + lag_ms + ExpiringTraits::session_expiry_ms;
+    CHECK(stamped_deadline < true_deadline);  // early, by exactly the lag
+
+    x.b.tick(stamped_deadline - 1);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 0u);
+    x.b.tick(stamped_deadline);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 1u);
+}
+
+TEST(a_close_reported_after_a_tick_stamps_the_disconnect_late) {
+    // The other ordering: the peer is already gone when the transport
+    // ticks, and only the pass after that does it report the close. The
+    // stamp is then later than the real close, so the session outlives
+    // its own expiry deadline by the same bound.
+    BedT<AllowAllSecurity, Recorder, ExpiringTraits> x;
+    const uint32_t connected_at = x.now;  // 1000
+    const uint32_t gone_at = connected_at + 5000;
+    const uint32_t noticed_at = gone_at + 4000;
+
+    wire::ConnectOpts o;
+    o.clean = false;
+    o.keepalive_s = 0;
+    x.connect(0, "gone", o);
+    expect_connack(x.t, 0, false, ConnackCode::accepted);
+
+    // The peer goes at gone_at. The broker hears nothing until this
+    // tick, which records the clock while the connection still counts as
+    // open, and only then is the close reported.
+    x.b.tick(noticed_at);
+    x.b.conn_closed(0);  // stamped noticed_at, which is after the real close
+
+    const uint32_t true_deadline = gone_at + ExpiringTraits::session_expiry_ms;
+    const uint32_t stamped_deadline = noticed_at + ExpiringTraits::session_expiry_ms;
+    CHECK(true_deadline < stamped_deadline);  // late, by exactly the interval
+
+    // At the deadline the real close implies, the session is still there.
+    x.b.tick(true_deadline);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 0u);
+
+    x.b.tick(stamped_deadline - 1);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 0u);
+    x.b.tick(stamped_deadline);
+    CHECK(x.b.observer().times(EventKind::session_expired) == 1u);
+}
+
 TEST(session_expiry_leaves_connected_sessions_alone) {
     BedT<AllowAllSecurity, Recorder, ExpiringTraits> x;
     wire::ConnectOpts o;
