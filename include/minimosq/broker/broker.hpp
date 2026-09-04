@@ -483,7 +483,28 @@ private:
     static QoS qos_max(QoS a, QoS b) noexcept { return a > b ? a : b; }
 
     // Server-assigned client ids: "mmq-<n>", unique among live sessions.
+    //
+    // The prefix is reserved: a client may not present an id that starts
+    // with it. The counter is sequential and starts at 1, so without the
+    // reservation any peer could name a live anonymous client's id, take
+    // its session over under [MQTT-3.1.4-2], and disconnect its owner —
+    // no guessing needed, and repeating it across the range evicts every
+    // anonymous client. Reserving the prefix costs the namespace and
+    // needs no entropy source, which a microcontroller may not have.
+    static constexpr StrView auto_id_prefix{"mmq-", 4};
     static constexpr size_t auto_id_len_max = 4 + 5;  // "mmq-" + up to 5 digits
+
+    static bool uses_reserved_prefix(StrView id) noexcept {
+        if (id.len < auto_id_prefix.len) {
+            return false;
+        }
+        for (size_t i = 0; i < auto_id_prefix.len; ++i) {
+            if (id.data[i] != auto_id_prefix.data[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     StrView generate_client_id(char* buf) noexcept {
         while (true) {
@@ -940,10 +961,19 @@ private:
             return;
         }
         // Ill-formed UTF-8 anywhere requires closing the connection
-        // [MQTT-1.5.3-1/-2]. (Passwords are binary data.)
+        // [MQTT-1.5.3-1/-2]. (Passwords are binary data.) This runs
+        // before the reserved-prefix check below, so a malformed id
+        // always closes rather than being answered with a CONNACK.
         if (!utf8_valid(client_id) || (p.has_username && !utf8_valid(p.username))) {
             notify_violation(ci, Err::malformed);
             c.dead = true;
+            return;
+        }
+        // A client-supplied id in the server-assigned space would let any
+        // peer name an anonymous client's session and take it over. The
+        // check is on the supplied id, so a generated one still passes.
+        if (!p.client_id.empty() && uses_reserved_prefix(client_id)) {
+            refuse(ci, ConnackCode::identifier_rejected, client_id);
             return;
         }
         if (p.has_will) {
