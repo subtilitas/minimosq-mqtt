@@ -4,16 +4,19 @@
 // retained messages). Objects keep their address from alloc() to
 // release(), so raw pointers/indices into the pool stay valid.
 //
-// alloc() value-initialises. For a T with no user-provided default
-// constructor that zero-initialises the object's members before its own
-// initialisers run, and that is what the broker relies on: slots are
-// reused, and a session must not start life holding the topic and
-// payload bytes of the client that had the slot before it. The
-// guarantee covers members, not the padding between them, which may
-// still hold what the previous occupant left; nothing here reads
-// padding. A T that does provide a default constructor gets no
-// zero-initialisation at all, so a reuser relying on this must check
-// which case its type is in.
+// alloc() value-initialises: new (slot) T(). For a T with no
+// user-provided default constructor, value-initialisation itself
+// zero-initialises the object before any constructor or default member
+// initialiser runs. The zeroing is that rule, not a constructor doing
+// the work. It is what the broker relies on: slots are reused, and a
+// session must not start life holding the topic and payload bytes of
+// the client that had the slot before it. The guarantee covers members,
+// not the padding between them, which may still hold what the previous
+// occupant left; nothing here reads padding. A T with a user-provided
+// default constructor gets no zero-initialisation at all — that
+// constructor runs on its own — so a reuser relying on this must check
+// which case its type is in. Note that T() = default; declared in the
+// class is not user-provided and stays in the first case.
 //
 // It costs one zeroing of sizeof(T) per alloc(). Measured with GCC 13 on
 // x86-64, a session at DefaultTraits is a little over 7 KB, so that is
