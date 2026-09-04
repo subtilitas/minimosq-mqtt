@@ -4,11 +4,14 @@
 // needs, backed entirely by in-object storage. Never allocates, never
 // throws: push_back/emplace_back report failure instead.
 //
-// T must not throw on construction, copy or destruction. The mutators
-// are noexcept and construct T inside themselves, so a throwing element
-// type terminates rather than propagating. Every type the library stores
-// here is an aggregate of fixed-size arrays; the requirement is stated
-// for anyone reusing the container.
+// T must not throw on default construction, copy construction, move
+// assignment or destruction. The mutators are noexcept and do all four
+// inside themselves — emplace_back() default-constructs, push_back()
+// copy-constructs, remove_ordered() and remove_unordered() move-assign
+// to close the gap, and clear() destroys — so a throwing element type
+// terminates rather than propagating. Every type the library stores here
+// is an aggregate of fixed-size arrays; the requirement is stated for
+// anyone reusing the container.
 //
 // Known deviation: ptr() launders the address of a slot whether or not
 // an object is live in it, and begin()/end() form that address on an

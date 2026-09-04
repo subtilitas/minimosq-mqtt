@@ -4,17 +4,24 @@
 // retained messages). Objects keep their address from alloc() to
 // release(), so raw pointers/indices into the pool stay valid.
 //
-// alloc() value-initialises, so a slot is zeroed before the object's own
-// initialisers run. That is deliberate: slots are reused, and a session
-// must not start life holding the topic and payload bytes of the client
-// that had the slot before it. It costs one zeroing of sizeof(T) per
-// alloc() — 7,264 bytes for a session at DefaultTraits, once per CONNECT.
+// alloc() value-initialises. For a T with no user-provided default
+// constructor — which is every type stored here — that zeroes the slot
+// before the object's own initialisers run, and the zeroing is the
+// point: slots are reused, and a session must not start life holding
+// the topic and payload bytes of the client that had the slot before
+// it. A T that does provide a default constructor gets no such
+// zeroing, so a reuser relying on this must keep that in mind.
+//
+// It costs one zeroing of sizeof(T) per alloc(). Measured with GCC 13 on
+// x86-64, a session at DefaultTraits is a little over 7 KB, so that is
+// roughly 7 KB per CONNECT; the figure moves with the traits, the
+// compiler and the ABI.
 //
 // T must not throw on construction or destruction, and neither must a
 // callable passed to for_each(): both run inside noexcept members, so a
 // throwing one terminates. The Observer, the only user-supplied callable
 // that reaches for_each(), is required to be noexcept by its own
-// contract. The same launder caveat as StaticVector applies to ptr().
+// contract.
 //
 // SPDX-License-Identifier: MIT
 #ifndef MINIMOSQ_CORE_POOL_HPP
