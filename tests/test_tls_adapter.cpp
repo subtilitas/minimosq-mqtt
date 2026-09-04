@@ -235,3 +235,154 @@ TEST(tls_adapter_publishes_the_narrower_capacity) {
     static_assert(TightScratch::out_buf_size == 128, "the adapter's own scratch bound");
     CHECK_EQ(TightScratch::out_buf_size, size_t{128});
 }
+
+// ------------------------------------------- buffering engines and sizing
+
+namespace {
+// Holds the first record it is given and only yields it when drained —
+// the shape the Engine contract permits ("the library can buffer") and
+// which nothing used to pump.
+struct BufferingEngine {
+    static constexpr size_t record_overhead = 8;
+
+    uint8_t held[256];
+    size_t held_len = 0;
+
+    bool on_ciphertext(ByteSpan in, uint8_t* plain, size_t plain_cap, size_t& plain_len, uint8_t*,
+                       size_t, size_t& cipher_len) {
+        cipher_len = 0;
+        if (in.len > plain_cap) {
+            return false;  // as NullTlsEngine does: refuse, never truncate
+        }
+        plain_len = in.len;
+        for (size_t i = 0; i < plain_len; ++i) {
+            plain[i] = in.data[i];
+        }
+        return true;
+    }
+
+    // Accepts the plaintext and writes nothing: the record is buffered.
+    // Refuses what it cannot hold rather than reporting success for
+    // bytes it dropped, which is the failure this change is about.
+    bool encrypt(ByteSpan plain, uint8_t*, size_t, size_t& cipher_len) {
+        cipher_len = 0;
+        if (held_len != 0 || plain.len > sizeof held) {
+            return false;
+        }
+        for (size_t i = 0; i < plain.len; ++i) {
+            held[i] = plain.data[i];
+        }
+        held_len = plain.len;
+        return true;
+    }
+
+    void reset() { held_len = 0; }
+
+    bool drain(uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) {
+        cipher_len = 0;
+        if (held_len > cipher_cap) {
+            return false;  // keep the record rather than lose it
+        }
+        for (size_t i = 0; i < held_len; ++i) {
+            cipher[i] = held[i];
+        }
+        cipher_len = held_len;
+        held_len = 0;
+        return true;
+    }
+};
+}  // namespace
+
+TEST(a_buffered_record_is_drained_rather_than_stranded) {
+    static_assert(engine_has_drain<BufferingEngine>::value, "the engine offers drain()");
+    static_assert(!engine_has_drain<NullTlsEngine>::value,
+                  "and an engine that never buffers may omit it");
+
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<BufferingEngine, RawCapture, SmallTraits::max_connections>;
+    RawCapture raw;
+    Tls tls{raw};
+    Broker<SmallTraits, Tls> b{tls};
+    auto driver = tls.driver(b);
+
+    CHECK(driver.conn_open(0, 1000) == Err::ok);
+    const wire::Pkt connect = wire::make_connect("buffered");
+    driver.conn_data(0, connect.span(), 1000);
+
+    // encrypt() took the CONNACK and reported success with nothing
+    // written, so the raw transport has seen no bytes yet.
+    CHECK_EQ(raw.logs[0].len, size_t{0});
+
+    // The pass drains it.
+    driver.tick(1100);
+    CHECK(raw.logs[0].len > 0);
+}
+
+// A drain() refusal is a fatal TLS error, and a write the raw transport
+// refuses has already taken the record out of the engine — the peer's
+// stream would resume mid-record. Both end the connection rather than
+// losing bytes quietly.
+namespace {
+struct FailingDrainEngine : BufferingEngine {
+    bool drain(uint8_t*, size_t, size_t& cipher_len) {
+        cipher_len = 0;
+        return false;  // fatal
+    }
+};
+}  // namespace
+
+TEST(a_failed_drain_closes_the_connection) {
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<FailingDrainEngine, RawCapture, SmallTraits::max_connections>;
+    RawCapture raw;
+    Tls tls{raw};
+    Broker<SmallTraits, Tls> b{tls};
+    auto driver = tls.driver(b);
+
+    CHECK(driver.conn_open(0, 1000) == Err::ok);
+    driver.tick(1100);
+    CHECK(raw.logs[0].closed);  // not left half-open with bytes lost
+}
+
+TEST(the_published_buffer_size_accounts_for_record_growth) {
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<BufferingEngine, RawCapture, SmallTraits::max_connections, 1024>;
+    // 1024 of scratch, 8 of which every record spends on framing.
+    static_assert(Tls::out_buf_size == 1024 - 8,
+                  "the broker must check what a packet may occupy, not the raw scratch");
+    CHECK_EQ(Tls::out_buf_size, size_t{1016});
+
+    // When the wrapped transport is the tighter buffer, the overhead
+    // comes off its size, not off the adapter's scratch.
+    using OverNarrow = TlsAdapter<BufferingEngine, NarrowRaw, SmallTraits::max_connections, 4096>;
+    static_assert(OverNarrow::out_buf_size == 64 - 8,
+                  "the wrapped transport's 64-byte ring, less the record overhead");
+    CHECK_EQ(OverNarrow::out_buf_size, size_t{56});
+
+    // An engine that declares no overhead publishes the scratch size.
+    using Plain = TlsAdapter<NullTlsEngine, RawCapture, SmallTraits::max_connections, 1024>;
+    static_assert(Plain::out_buf_size == 1024, "nothing to subtract");
+    CHECK_EQ(Plain::out_buf_size, size_t{1024});
+}
+
+// tick() runs on every poll pass, including passes with no connection at
+// all. An engine for a slot that was never opened has not been reset, so
+// it must not be asked to drain — and a refusal there must not close a
+// connection that does not exist.
+TEST(idle_ticks_do_not_touch_unopened_engines) {
+    using RawCapture = CaptureTransport<SmallTraits::max_connections>;
+    using Tls = TlsAdapter<FailingDrainEngine, RawCapture, SmallTraits::max_connections>;
+    RawCapture raw;
+    Tls tls{raw};
+    Broker<SmallTraits, Tls> b{tls};
+    auto driver = tls.driver(b);
+
+    // No connection has ever been opened. FailingDrainEngine would fail
+    // every drain, so any slot touched here would be closed.
+    for (int pass = 0; pass < 3; ++pass) {
+        driver.tick(1000 + static_cast<uint32_t>(pass));
+    }
+    for (size_t ci = 0; ci < SmallTraits::max_connections; ++ci) {
+        CHECK(!raw.logs[ci].closed);
+    }
+}

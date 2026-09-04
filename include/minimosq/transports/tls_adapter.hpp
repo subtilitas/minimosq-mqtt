@@ -35,6 +35,22 @@
 //       // complete and the library cannot buffer).
 //       bool encrypt(minimosq::ByteSpan plain,
 //                    uint8_t* cipher, size_t cipher_cap, size_t& cipher_len);
+//
+//       // OPTIONAL. An engine that buffers a record — accepting it from
+//       // encrypt() with nothing to write yet — must offer this, or the
+//       // record never leaves: encrypt() reporting success is the only
+//       // signal the broker gets, and it moves on. The adapter calls it
+//       // once per connection per pass and writes whatever comes back.
+//       // Return false on a fatal TLS error. Engines that never buffer
+//       // may omit it.
+//       bool drain(uint8_t* cipher, size_t cipher_cap, size_t& cipher_len);
+//
+//       // OPTIONAL. Bytes a record adds to the plaintext it carries.
+//       // When given, the adapter subtracts it from the buffer size it
+//       // publishes, so Broker's outbound-size check accounts for the
+//       // growth instead of discovering it as a refusal at run time —
+//       // which is an abnormal disconnect, and publishes the will.
+//       static constexpr size_t record_overhead = 0;
 //   };
 //
 // NullTlsEngine below is a pass-through with exactly this shape — it
@@ -53,6 +69,40 @@
 #include "../transport.hpp"
 
 namespace minimosq {
+
+namespace tls_detail {
+// Undefined: named only inside decltype, to form an lvalue of a type.
+template <typename T>
+T& lvalue() noexcept;
+}  // namespace tls_detail
+
+// An engine that buffers records offers drain(); one that never does may
+// omit it, and the adapter then has nothing to pump.
+template <typename E, typename = void>
+struct engine_has_drain {
+    static constexpr bool value = false;
+};
+template <typename E>
+struct engine_has_drain<E, decltype((void)static_cast<bool>(tls_detail::lvalue<E>().drain(
+                               tls_detail::lvalue<uint8_t*>(), tls_detail::lvalue<size_t>(),
+                               tls_detail::lvalue<size_t>())))> {
+    // The cast is the point: a drain() returning void matches the shape
+    // but not the contract, and would fail to compile where the adapter
+    // tests the result. It is rejected here instead.
+    static constexpr bool value = true;
+};
+
+// Bytes a record adds to its plaintext; 0 when the engine does not say.
+template <typename E, typename = void>
+struct engine_record_overhead {
+    static constexpr size_t value = 0;
+};
+template <typename E>
+struct engine_record_overhead<E, decltype((void)size_t{E::record_overhead})> {
+    // Braced, so a member that is not a non-narrowing size_t constant —
+    // signed, or too wide — is not detected rather than subtracted.
+    static constexpr size_t value = size_t{E::record_overhead};
+};
 
 // Wiring demonstration only: copies bytes through unchanged.
 struct NullTlsEngine {
@@ -116,8 +166,27 @@ public:
     // Still necessary rather than sufficient: ciphertext is larger than
     // plaintext by the record overhead, which neither number accounts
     // for, so a packet this check allows can still be refused.
-    static constexpr size_t out_buf_size =
+    // What a packet may occupy before the engine adds its record
+    // framing. Publishing BufSize itself would have Broker check a
+    // number the ciphertext then exceeds, and encrypt() would refuse
+    // every full-size packet — a refusal the broker reads as an abnormal
+    // disconnect, which publishes the peer's will. Accounting for the
+    // growth here turns that into a build failure instead.
+    static constexpr size_t record_overhead = engine_record_overhead<Engine>::value;
+
+    // Ciphertext has to fit the adapter's scratch and the wrapped
+    // transport's buffer, so the narrower of the two is the real
+    // ciphertext capacity. The overhead comes off that, not off BufSize:
+    // subtracting first and narrowing after publishes the raw
+    // transport's full buffer as plaintext capacity whenever it is the
+    // tighter one, which is exactly the case this accounts for.
+    static constexpr size_t cipher_capacity =
         narrower_capacity(BufSize, transport_out_buf_size<RawTransport>::value);
+    static_assert(cipher_capacity > record_overhead,
+                  "the ciphertext capacity — the smaller of TlsAdapter's BufSize and the "
+                  "wrapped transport's buffer — leaves no room for the engine's record "
+                  "overhead");
+    static constexpr size_t out_buf_size = cipher_capacity - record_overhead;
 
     explicit TlsAdapter(RawTransport& raw) noexcept : raw_(raw) {}
 
@@ -138,7 +207,45 @@ public:
 
     void close(size_t ci) {
         if (ci < max_connections) {
+            engine_open_[ci] = false;
             raw_.close(ci);
+        }
+    }
+
+    // Write out whatever the engines are holding. A no-op for engines
+    // that do not offer drain(), which are the ones that never buffer.
+    //
+    // Both failures here end the connection. A drain() refusal is a
+    // fatal TLS error by the same rule as on_ciphertext(). A refused
+    // write is worse than a dropped packet: the record has already left
+    // the engine and cannot be put back, so the peer's stream would
+    // resume mid-record. Reporting it from here is safe — this runs from
+    // the driver's tick(), not from inside send(), so nothing is
+    // iterating the broker's sessions.
+    template <typename B>
+    void drain_engines(B& broker) {
+        if constexpr (engine_has_drain<Engine>::value) {
+            for (size_t ci = 0; ci < max_connections; ++ci) {
+                if (!engine_open_[ci]) {
+                    continue;  // never opened, or already closed
+                }
+                size_t cipher_len = 0;
+                // cipher_len comes from the engine; a value past the
+                // buffer would have raw_.send() read whatever follows it.
+                const bool ok = engines_[ci].drain(cipher_, sizeof cipher_, cipher_len) &&
+                                cipher_len <= sizeof cipher_;
+                if (ok && cipher_len == 0) {
+                    continue;  // nothing held
+                }
+                if (ok && raw_.send(ci, ByteSpan{cipher_, cipher_len})) {
+                    continue;
+                }
+                engine_open_[ci] = false;
+                raw_.close(ci);
+                broker.conn_closed(ci);  // the transport has already closed it
+            }
+        } else {
+            (void)broker;
         }
     }
 
@@ -160,11 +267,13 @@ public:
                 return Err::state;
             }
             tls.engines_[ci].reset();
+            tls.engine_open_[ci] = true;
             return broker.conn_open(ci, now_ms);
         }
 
         void conn_closed(size_t ci) {
             if (ci < max_connections) {
+                tls.engine_open_[ci] = false;
                 broker.conn_closed(ci);
             }
         }
@@ -200,7 +309,13 @@ public:
             return Err::ok;
         }
 
-        void tick(uint32_t now_ms) { broker.tick(now_ms); }
+        void tick(uint32_t now_ms) {
+            // A record the engine buffered has no other way out: nothing
+            // else asks it for output, and on_ciphertext() only runs when
+            // the peer sends more bytes.
+            tls.drain_engines(broker);
+            broker.tick(now_ms);
+        }
     };
 
     template <typename B>
@@ -213,6 +328,11 @@ private:
     // Sized by the published capacity: an index past it never reaches
     // the wrapped transport, so an engine for it could never be used.
     Engine engines_[max_connections];
+    // An engine is only meaningful between conn_open() and the close
+    // that follows: drain() on a slot that was never opened would read
+    // whatever the engine's default state is, and a refused write there
+    // would close a connection that does not exist.
+    bool engine_open_[max_connections] = {};
     // Shared record scratch; see Driver::conn_data. Only ever live for
     // the duration of one call.
     uint8_t plain_[BufSize];
