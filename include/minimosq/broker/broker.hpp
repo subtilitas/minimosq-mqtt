@@ -765,8 +765,9 @@ private:
         // passing those straight through is deliberate.
         if (payload.len > Traits::max_payload_len) {
             // Documented policy: too large for owned storage — this
-            // subscriber is skipped. Set max_payload_len >=
-            // max_packet_size to rule this out entirely.
+            // subscriber is skipped. Set max_payload_len ==
+            // max_packet_size to rule this out for a client publish: an
+            // inbound payload cannot exceed the body that carries it.
             notify_drop(s, topic, eff, Err::oversize);
             return;
         }

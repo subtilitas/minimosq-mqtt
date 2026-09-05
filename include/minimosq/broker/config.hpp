@@ -60,12 +60,19 @@ struct DefaultTraits {
     // and queued/in-flight QoS>0 deliveries). Pass-through QoS 0
     // delivery is bounded by max_packet_size instead.
     //
-    // Exceeding it is invisible to the publisher. A QoS>0 subscriber
-    // that would need an owned copy is skipped and delivery_dropped is
-    // reported, but the PUBLISH is still acknowledged, because 3.1.1 has
-    // no error acknowledgement and no way for a server to advertise a
-    // limit. Set max_payload_len >= max_packet_size to rule the case out
-    // entirely; otherwise the Observer is the only place it is visible.
+    // Exceeding it is invisible to a publishing *client*. A QoS>0
+    // subscriber that would need an owned copy is skipped and
+    // delivery_dropped is reported, but the PUBLISH is still
+    // acknowledged, because 3.1.1 has no error acknowledgement and no
+    // way for a server to advertise a limit. The Observer is the only
+    // place a client publish shows it. Broker::publish() is not blind:
+    // it returns Err::oversize for the same case.
+    //
+    // max_payload_len == max_packet_size rules the client case out. An
+    // inbound payload travels inside a body already bounded by
+    // max_packet_size, so it can never exceed that; a larger
+    // max_payload_len buys nothing and only costs storage.
+    //
     // Contrast max_topic_len, whose SUBSCRIBE half the client does see:
     // SUBACK carries a code per filter, so a refusal has somewhere to go.
     static constexpr size_t max_payload_len = 512;

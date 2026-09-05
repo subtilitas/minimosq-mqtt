@@ -130,7 +130,7 @@ Full details, the `TableAcl` component, and the threat model are in
 | Retained message too big to store, topic already retained | the previous value is **purged**, not left to be served as current; still forwarded live |
 | Offline queue full | newest message for that session is dropped, and `delivery_dropped` reported |
 | Topic name longer than `max_topic_len` | refused: connection closed with `Err::oversize` (client PUBLISH), CONNACK 0x03 (will), `Err::oversize` returned (`Broker::publish`). It could not be retained or queued, so half-delivering it is worse than refusing |
-| Payload larger than `max_payload_len` | delivered QoS 0 pass-through only; QoS>0 subscribers skipped and `delivery_dropped` reported (size `max_payload_len >= max_packet_size` to avoid) |
+| Payload larger than `max_payload_len` | delivered QoS 0 pass-through only; QoS>0 subscribers skipped and `delivery_dropped` reported (set `max_payload_len == max_packet_size` to avoid it for client publishes; larger buys nothing, since an inbound payload cannot exceed the body carrying it) |
 | Inbound QoS 2 id table full | the oldest tracked identifier is evicted and `inbound_qos2_evicted` reported; the new one is tracked and the PUBLISH acknowledged. Exactly-once degrades to at-least-once for the forgotten identifier — dropping the connection instead was unrecoverable, since the table survives a disconnect and every reconnect died on its first QoS 2 publish |
 | Will topic/payload beyond capacity limits | CONNACK 0x03, connection closed |
 | Session slots exhausted, some session disconnected | the longest-disconnected session is evicted for the new client |
