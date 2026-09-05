@@ -59,6 +59,15 @@ struct DefaultTraits {
     // Largest payload the broker will *store* (retained messages, wills,
     // and queued/in-flight QoS>0 deliveries). Pass-through QoS 0
     // delivery is bounded by max_packet_size instead.
+    //
+    // Exceeding it is invisible to the publisher. A QoS>0 subscriber
+    // that would need an owned copy is skipped and delivery_dropped is
+    // reported, but the PUBLISH is still acknowledged, because 3.1.1 has
+    // no error acknowledgement and no way for a server to advertise a
+    // limit. Set max_payload_len >= max_packet_size to rule the case out
+    // entirely; otherwise the Observer is the only place it is visible.
+    // Contrast max_topic_len, whose SUBSCRIBE half the client does see:
+    // SUBACK carries a code per filter, so a refusal has somewhere to go.
     static constexpr size_t max_payload_len = 512;
 
     // Retained messages held, one per topic. A full store is a
