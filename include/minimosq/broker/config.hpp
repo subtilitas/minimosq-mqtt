@@ -59,6 +59,25 @@ struct DefaultTraits {
     // Largest payload the broker will *store* (retained messages, wills,
     // and queued/in-flight QoS>0 deliveries). Pass-through QoS 0
     // delivery is bounded by max_packet_size instead.
+    //
+    // Exceeding it is invisible to a publishing *client*. A QoS>0
+    // subscriber that would need an owned copy is skipped and
+    // delivery_dropped is reported, but the PUBLISH is still
+    // acknowledged, because 3.1.1 has no error acknowledgement and no
+    // way for a server to advertise a limit. The Observer is the only
+    // place a client publish shows it. Broker::publish() is not blind:
+    // it returns Err::oversize for the same case.
+    //
+    // max_payload_len >= max_packet_size rules the case out for client
+    // publishes, and == is the value to pick: an inbound payload travels
+    // inside a body already bounded by max_packet_size, so headroom past
+    // it is unreachable from the wire. That headroom is not wasted,
+    // though — max_packet_size does not bound an application publish, so
+    // it is what raises the ceiling for Broker::publish(). It costs
+    // stored-message memory in every session queue and retained slot.
+    //
+    // Contrast max_topic_len, whose SUBSCRIBE half the client does see:
+    // SUBACK carries a code per filter, so a refusal has somewhere to go.
     static constexpr size_t max_payload_len = 512;
 
     // Retained messages held, one per topic. A full store is a
