@@ -158,8 +158,9 @@ verified against the shipped `.sha256`, confirmed byte-identical to
 `git archive` of the tag across all 28 headers, and then used to build
 another project's broker with no edits.
 
-The same checks pass on each release artifact since.
-`minimosq-1.0.1-headers.tar.gz` has SHA-256
+The integrity half of that — checksum, version, and byte-identity
+against the tag — is repeated for every release, without the downstream
+build. `minimosq-1.0.1-headers.tar.gz` has SHA-256
 `21ee772ab3dd67d14397e20997cdb705eb0ed57e63e296f9256098aab21701c0`,
 matches the shipped `.sha256` file, carries 28 headers byte-identical to
 the tree at `v1.0.1`, and reports `MINIMOSQ_VERSION` 1.0.1.
