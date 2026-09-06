@@ -1,12 +1,14 @@
 # Testing
 
-What 1.0.0 was tested with, what the numbers mean, and what is not
+What this library is tested with, what the numbers mean, and what is not
 covered. Every figure here is produced by something in this repository or
-by a run recorded against a named commit — nothing is an estimate.
+by a run recorded against a named commit — nothing is an estimate. The
+figures track the current release; where a measurement belongs to an
+earlier one, it says which.
 
 ## The in-tree suite
 
-260 test cases in 18 binaries, run by `ctest` on every push.
+264 test cases in 18 binaries, run by `ctest` on every push.
 
 | Binary | Cases | Area |
 |---|---:|---|
@@ -22,7 +24,7 @@ by a run recorded against a named commit — nothing is an estimate.
 | `test_transport_pipe` | 12 | pipe transport, descriptor ownership, EINTR |
 | `test_broker_security` | 11 | authentication and authorization hooks |
 | `test_frame` | 10 | stream framing, varints, partial packets |
-| `test_tls_adapter` | 10 | the TLS seam, engine probes, drain |
+| `test_tls_adapter` | 14 | the TLS seam, engine probes, drain, engine-reported lengths |
 | `test_session_state` | 9 | subscription and queue bookkeeping |
 | `test_table_acl` | 9 | the `TableAcl` policy |
 | `test_topic` | 9 | `topic_matches`, filter validity, subsumption |
@@ -149,17 +151,46 @@ shown to discriminate first: a deliberately wrong client-side matcher,
 one where `+` spans a separator, produces 1,570 disagreements over the
 same 7,011 pairs.
 
-**The release artifact.** `minimosq-1.0.0-rc2-headers.tar.gz` was
-downloaded from its release, checked against the shipped `.sha256`,
-confirmed byte-identical to `git archive` of the tag across all 28
-headers, and then used to build another project's broker with no edits.
+**The release artifact.** Every release is checked the same way, and the
+check is on the artifact a consumer downloads rather than on a source
+tree. `minimosq-1.0.0-rc2-headers.tar.gz` was pulled from its release,
+verified against the shipped `.sha256`, confirmed byte-identical to
+`git archive` of the tag across all 28 headers, and then used to build
+another project's broker with no edits.
 
-The same checks pass on the 1.0.0 artifact.
-`minimosq-1.0.0-headers.tar.gz` has SHA-256
-`cb66c6c0a7336057ff25470593a1c051e50c1c28951eee69700a2d38a165eb9b`,
+The integrity half of that — checksum, version, and byte-identity
+against the tag — is repeated for every release, without the downstream
+build. `minimosq-1.0.1-headers.tar.gz` has SHA-256
+`21ee772ab3dd67d14397e20997cdb705eb0ed57e63e296f9256098aab21701c0`,
 matches the shipped `.sha256` file, carries 28 headers byte-identical to
-the tree at `v1.0.0`, reports `MINIMOSQ_VERSION` 1.0.0, and compiles a
-broker as a vendored copy under `-Wall -Wextra -Werror`.
+the tree at `v1.0.1`, and reports `MINIMOSQ_VERSION` 1.0.1.
+
+## What the external suite found
+
+Round 1 and round 2 found no defect. Round 3 took the TLS adapter as a
+target — chosen because it was the only layer with neither strong
+in-tree coverage nor any external coverage — and found one on the first
+pass, fixed in 1.0.1.
+
+`TlsAdapter` turns four engine-reported lengths into `ByteSpan`s. One was
+guarded, and carried the comment naming the hazard; the other three were
+not, and the worst of them handed an oversized span to
+`Broker::conn_data()`, which parsed memory past `plain_` as MQTT. A
+transport that reads the span — a socket write does exactly that — trips
+AddressSanitizer with a `global-buffer-overflow`. The probe faults
+against the published 1.0.0 headers tarball and is clean against 1.0.1.
+
+Two things about that are worth keeping:
+
+- **The hazard had been identified and half-fixed.** The guarded site's
+  comment states the danger precisely. Whatever made one site get a
+  bounds check did not carry to the other three, and no test asked.
+- **It was reachable only from outside the tree's own assumptions.** The
+  contract says an engine writes "up to cap", so the in-tree tests, which
+  use honest engines, could not see it. It took a suite willing to model
+  a policy type that breaks its contract — which is the same
+  documentation-as-oracle problem this project's own review record
+  describes.
 
 ## Not covered
 
