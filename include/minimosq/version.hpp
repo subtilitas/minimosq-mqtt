@@ -23,7 +23,7 @@
 
 #define MINIMOSQ_VERSION_MAJOR 1
 #define MINIMOSQ_VERSION_MINOR 0
-#define MINIMOSQ_VERSION_PATCH 0
+#define MINIMOSQ_VERSION_PATCH 1
 
 // One comparable integer: major * 1000000 + minor * 1000 + patch, so
 // 1.0.0 -> 1000000. Minor and patch are the two fixed-width fields and
