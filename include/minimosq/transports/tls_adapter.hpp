@@ -199,7 +199,26 @@ public:
             return false;
         }
         size_t cipher_len = 0;
-        if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len)) {
+        // cipher_len comes from the engine. A value past the buffer
+        // would have raw_.send() read whatever follows it, so a report
+        // outside the capacity is treated as a failed encrypt() — the
+        // same rule drain_engines() applies. Refusing beats truncating:
+        // a short TLS record desynchronises the peer's stream.
+        //
+        // Reported as a refusal and nothing more, the same as a failed
+        // encrypt() has always been. Closing the slot here instead was
+        // tried and is wrong: send() runs inside the broker, so the
+        // teardown cannot be reported with conn_closed() without
+        // re-entering it — which is the hazard drain_engines() avoids by
+        // reporting from tick() — and a slot closed without that report
+        // leaves the broker pacing against a connection it still
+        // believes in. A breach is permanent and a caller pacing against
+        // it retries until its own keep-alive or idle deadline; making
+        // that terminal needs a deferred teardown driven from tick(),
+        // which is a change of failure semantics rather than a bounds
+        // check, and is not one to make in a patch release.
+        if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len) ||
+            cipher_len > sizeof cipher_) {
             return false;
         }
         return cipher_len == 0 || raw_.send(ci, ByteSpan{cipher_, cipher_len});
@@ -289,16 +308,25 @@ public:
             // transport contract is single-threaded, so sharing is safe.
             size_t plain_len = 0;
             size_t cipher_out_len = 0;
+            // Both lengths come from the engine, and both become spans
+            // below — one handed to the transport, one to the broker,
+            // which would parse past plain_ as MQTT. A report outside
+            // the capacity is treated exactly like a failed call.
             if (!tls.engines_[ci].on_ciphertext(cipher_in, tls.plain_, BufSize, plain_len,
-                                                tls.cipher_out_, BufSize, cipher_out_len)) {
-                tls.raw_.close(ci);
+                                                tls.cipher_out_, BufSize, cipher_out_len) ||
+                plain_len > BufSize || cipher_out_len > BufSize) {
+                // close() rather than raw_.close(): it also clears
+                // engine_open_, without which drain_engines() would keep
+                // draining this slot and sending on a closed connection
+                // every tick.
+                tls.close(ci);
                 broker.conn_closed(ci);
                 return Err::malformed;
             }
             // Handshake/alert records the engine wants on the wire.
             if (cipher_out_len > 0) {
                 if (!tls.raw_.send(ci, ByteSpan{tls.cipher_out_, cipher_out_len})) {
-                    tls.raw_.close(ci);
+                    tls.close(ci);  // clears engine_open_ too
                     broker.conn_closed(ci);
                     return Err::capacity;
                 }
