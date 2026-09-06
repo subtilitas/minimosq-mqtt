@@ -199,7 +199,13 @@ public:
             return false;
         }
         size_t cipher_len = 0;
-        if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len)) {
+        // cipher_len comes from the engine. A value past the buffer
+        // would have raw_.send() read whatever follows it, so a report
+        // outside the capacity is treated as a failed encrypt() — the
+        // same rule drain_engines() applies. Refusing beats truncating:
+        // a short TLS record desynchronises the peer's stream.
+        if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len) ||
+            cipher_len > sizeof cipher_) {
             return false;
         }
         return cipher_len == 0 || raw_.send(ci, ByteSpan{cipher_, cipher_len});
@@ -289,8 +295,13 @@ public:
             // transport contract is single-threaded, so sharing is safe.
             size_t plain_len = 0;
             size_t cipher_out_len = 0;
+            // Both lengths come from the engine, and both become spans
+            // below — one handed to the transport, one to the broker,
+            // which would parse past plain_ as MQTT. A report outside
+            // the capacity is treated exactly like a failed call.
             if (!tls.engines_[ci].on_ciphertext(cipher_in, tls.plain_, BufSize, plain_len,
-                                                tls.cipher_out_, BufSize, cipher_out_len)) {
+                                                tls.cipher_out_, BufSize, cipher_out_len) ||
+                plain_len > BufSize || cipher_out_len > BufSize) {
                 tls.raw_.close(ci);
                 broker.conn_closed(ci);
                 return Err::malformed;

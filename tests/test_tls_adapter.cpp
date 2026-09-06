@@ -386,3 +386,132 @@ TEST(idle_ticks_do_not_touch_unopened_engines) {
         CHECK(!raw.logs[ci].closed);
     }
 }
+
+// An engine that lies about how much it wrote. The adapter turns four
+// engine-reported lengths into spans; only drain()'s was checked, so a
+// transport that read any of the other three read past the buffer. The
+// contract says "up to cap", so a lying engine is in breach — but the
+// adapter is the seam to someone else's TLS library, which is the one
+// place in this codebase where the other side of the interface is not
+// ours, and the drain() guard had already decided the engine's word is
+// not sufficient.
+namespace {
+
+// Reports cap + Overshoot in whichever position is selected.
+struct LyingEngine {
+    enum class Lie {
+        none,
+        encrypt_cipher,
+        on_ciphertext_cipher,
+        on_ciphertext_plain,
+        drain_cipher
+    };
+    static constexpr size_t overshoot = 4096;
+    Lie lie = Lie::none;
+
+    void reset() noexcept {}
+
+    // NOLINTBEGIN(readability-non-const-parameter)
+    bool on_ciphertext(ByteSpan in, uint8_t* plain, size_t plain_cap, size_t& plain_len,
+                       uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) noexcept {
+        (void)cipher;
+        cipher_len = (lie == Lie::on_ciphertext_cipher) ? cipher_cap + overshoot : 0;
+        const size_t n = in.len < plain_cap ? in.len : plain_cap;
+        for (size_t i = 0; i < n; ++i) {
+            plain[i] = in.data[i];
+        }
+        plain_len = (lie == Lie::on_ciphertext_plain) ? plain_cap + overshoot : n;
+        return true;
+    }
+
+    bool encrypt(ByteSpan plain, uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) noexcept {
+        const size_t n = plain.len < cipher_cap ? plain.len : cipher_cap;
+        for (size_t i = 0; i < n; ++i) {
+            cipher[i] = plain.data[i];
+        }
+        cipher_len = (lie == Lie::encrypt_cipher) ? cipher_cap + overshoot : n;
+        return true;
+    }
+
+    bool drain(uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) noexcept {
+        (void)cipher;
+        cipher_len = (lie == Lie::drain_cipher) ? cipher_cap + overshoot : 0;
+        return true;
+    }
+    // NOLINTEND(readability-non-const-parameter)
+};
+
+// Records the largest span it was handed, so a test can assert the span
+// never exceeds the buffer without reading past it and crashing here.
+template <size_t MaxConns>
+struct WidthTransport {
+    size_t widest = 0;
+    bool closed[MaxConns] = {};
+    bool send(size_t, ByteSpan b) {
+        if (b.len > widest) {
+            widest = b.len;
+        }
+        return true;
+    }
+    void close(size_t ci) { closed[ci] = true; }
+};
+
+constexpr size_t lying_buf = 512;
+using LyingTls = TlsAdapter<LyingEngine, WidthTransport<SmallTraits::max_connections>,
+                            SmallTraits::max_connections, lying_buf>;
+
+}  // namespace
+
+TEST(a_lying_encrypt_length_never_reaches_the_transport) {
+    WidthTransport<SmallTraits::max_connections> raw;
+    LyingTls tls{raw};
+    Broker<SmallTraits, LyingTls> broker{tls};
+    auto driver = tls.driver(broker);
+
+    CHECK(driver.conn_open(0, 1000) == Err::ok);
+    CHECK(driver.conn_data(0, wire::make_connect("c").span(), 1000) == Err::ok);
+
+    tls.engine(0)->lie = LyingEngine::Lie::encrypt_cipher;
+    // A CONNACK is already out; drive one more send through the adapter.
+    (void)broker.publish("t", wire::bs("x"), QoS::at_most_once, false);
+    tls.send(0, wire::bs("bytes"));
+
+    CHECK(raw.widest <= lying_buf);
+}
+
+TEST(a_lying_on_ciphertext_length_never_reaches_the_transport_or_the_broker) {
+    // The plaintext case is the worse of the two: the span goes to
+    // Broker::conn_data(), which would parse past plain_ as MQTT.
+    for (const auto lie :
+         {LyingEngine::Lie::on_ciphertext_cipher, LyingEngine::Lie::on_ciphertext_plain}) {
+        WidthTransport<SmallTraits::max_connections> raw;
+        LyingTls tls{raw};
+        Broker<SmallTraits, LyingTls> broker{tls};
+        auto driver = tls.driver(broker);
+
+        CHECK(driver.conn_open(0, 1000) == Err::ok);
+        tls.engine(0)->lie = lie;
+        const Err e = driver.conn_data(0, wire::make_connect("c").span(), 1000);
+
+        // Treated exactly as a failed engine call: connection ended.
+        CHECK(e == Err::malformed);
+        CHECK(raw.closed[0]);
+        CHECK(raw.widest <= lying_buf);
+    }
+}
+
+TEST(a_lying_drain_length_still_never_reaches_the_transport) {
+    // The one site that was already guarded, pinned so a change that
+    // removes the guard fails here too.
+    WidthTransport<SmallTraits::max_connections> raw;
+    LyingTls tls{raw};
+    Broker<SmallTraits, LyingTls> broker{tls};
+    auto driver = tls.driver(broker);
+
+    CHECK(driver.conn_open(0, 1000) == Err::ok);
+    tls.engine(0)->lie = LyingEngine::Lie::drain_cipher;
+    driver.tick(2000);
+
+    CHECK(raw.widest <= lying_buf);
+    CHECK(raw.closed[0]);
+}
