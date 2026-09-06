@@ -204,8 +204,19 @@ public:
         // outside the capacity is treated as a failed encrypt() — the
         // same rule drain_engines() applies. Refusing beats truncating:
         // a short TLS record desynchronises the peer's stream.
+        //
+        // Both are terminal rather than backpressure. Returning false
+        // alone would let a caller pacing against a transient refusal
+        // retry an engine that is broken, for ever, so the slot is
+        // closed here and the outcome no longer depends on which broker
+        // path made the call. conn_closed() is deliberately not reported
+        // from here: this runs inside the broker's own send(), and
+        // re-entering it there is what drain_engines() avoids by
+        // reporting from tick(). The false return is what the broker
+        // acts on.
         if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len) ||
             cipher_len > sizeof cipher_) {
+            close(ci);
             return false;
         }
         return cipher_len == 0 || raw_.send(ci, ByteSpan{cipher_, cipher_len});
