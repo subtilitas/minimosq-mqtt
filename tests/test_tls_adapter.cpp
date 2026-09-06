@@ -481,9 +481,6 @@ TEST(a_lying_encrypt_length_never_reaches_the_transport) {
     // width assertion below while breaking the contract.
     CHECK(!tls.send(0, wire::bs("bytes")));
     CHECK(raw.widest <= lying_buf);
-    // Terminal, not backpressure — a caller that paces must not retry a
-    // broken engine for ever.
-    CHECK(raw.closed[0]);
 }
 
 TEST(a_lying_on_ciphertext_length_never_reaches_the_transport_or_the_broker) {

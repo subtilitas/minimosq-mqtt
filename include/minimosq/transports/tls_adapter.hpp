@@ -205,18 +205,20 @@ public:
         // same rule drain_engines() applies. Refusing beats truncating:
         // a short TLS record desynchronises the peer's stream.
         //
-        // Both are terminal rather than backpressure. Returning false
-        // alone would let a caller pacing against a transient refusal
-        // retry an engine that is broken, for ever, so the slot is
-        // closed here and the outcome no longer depends on which broker
-        // path made the call. conn_closed() is deliberately not reported
-        // from here: this runs inside the broker's own send(), and
-        // re-entering it there is what drain_engines() avoids by
-        // reporting from tick(). The false return is what the broker
-        // acts on.
+        // Reported as a refusal and nothing more, the same as a failed
+        // encrypt() has always been. Closing the slot here instead was
+        // tried and is wrong: send() runs inside the broker, so the
+        // teardown cannot be reported with conn_closed() without
+        // re-entering it — which is the hazard drain_engines() avoids by
+        // reporting from tick() — and a slot closed without that report
+        // leaves the broker pacing against a connection it still
+        // believes in. A breach is permanent and a caller pacing against
+        // it retries until its own keep-alive or idle deadline; making
+        // that terminal needs a deferred teardown driven from tick(),
+        // which is a change of failure semantics rather than a bounds
+        // check, and is not one to make in a patch release.
         if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len) ||
             cipher_len > sizeof cipher_) {
-            close(ci);
             return false;
         }
         return cipher_len == 0 || raw_.send(ci, ByteSpan{cipher_, cipher_len});
