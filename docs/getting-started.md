@@ -27,7 +27,7 @@ Fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(minimosq
   GIT_REPOSITORY https://github.com/subtilitas/minimosq-mqtt.git
-  GIT_TAG v1.0.0)
+  GIT_TAG v1.0.1)
 FetchContent_MakeAvailable(minimosq)
 target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
@@ -40,7 +40,7 @@ target_link_libraries(my_app PRIVATE minimosq::minimosq)
 ```
 
 The pinned tag is
-[1.0.0](https://github.com/subtilitas/minimosq-mqtt/releases/tag/v1.0.0),
+[1.0.1](https://github.com/subtilitas/minimosq-mqtt/releases/tag/v1.0.1),
 the newest stable release, and `find_package(minimosq 1.0 REQUIRED)`
 matches it. Compatibility is `SameMajorVersion`, so a 1.0 request
 accepts any 1.x: from 1.0 on a minor release adds to the interface and
