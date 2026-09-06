@@ -399,7 +399,7 @@ namespace {
 
 // Reports cap + Overshoot in whichever position is selected.
 struct LyingEngine {
-    enum class Lie {
+    enum class Lie : uint8_t {
         none,
         encrypt_cipher,
         on_ciphertext_cipher,
