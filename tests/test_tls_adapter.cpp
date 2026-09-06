@@ -433,8 +433,10 @@ struct LyingEngine {
         return true;
     }
 
+    size_t drains = 0;
     bool drain(uint8_t* cipher, size_t cipher_cap, size_t& cipher_len) noexcept {
         (void)cipher;
+        ++drains;
         cipher_len = (lie == Lie::drain_cipher) ? cipher_cap + overshoot : 0;
         return true;
     }
@@ -519,4 +521,29 @@ TEST(a_lying_drain_length_still_never_reaches_the_transport) {
 
     CHECK(raw.widest <= lying_buf);
     CHECK(raw.closed[0]);
+}
+
+TEST(a_slot_torn_down_by_an_engine_failure_is_not_drained_afterwards) {
+    // ad988aa added engine_open_ so drain_engines() only touches live
+    // connections, but conn_data()'s two failure paths closed the raw
+    // slot without clearing it. The slot then looked open for ever: the
+    // next tick drained a torn-down engine and sent on a closed socket.
+    WidthTransport<SmallTraits::max_connections> raw;
+    LyingTls tls{raw};
+    Broker<SmallTraits, LyingTls> broker{tls};
+    auto driver = tls.driver(broker);
+
+    CHECK(driver.conn_open(0, 1000) == Err::ok);
+    tls.engine(0)->lie = LyingEngine::Lie::on_ciphertext_plain;
+    CHECK(driver.conn_data(0, wire::make_connect("c").span(), 1000) == Err::malformed);
+    CHECK(raw.closed[0]);
+
+    // The property is that the engine is not asked at all. Asserting on
+    // bytes sent would not catch it: drain()'s own guard rejects an
+    // over-long report before any send, so a drained-but-torn-down slot
+    // looks identical to an untouched one from the transport.
+    const size_t drains_before = tls.engine(0)->drains;
+    driver.tick(2000);
+    driver.tick(3000);
+    CHECK_EQ(tls.engine(0)->drains, drains_before);
 }

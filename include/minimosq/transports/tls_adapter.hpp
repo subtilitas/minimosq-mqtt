@@ -313,14 +313,18 @@ public:
             if (!tls.engines_[ci].on_ciphertext(cipher_in, tls.plain_, BufSize, plain_len,
                                                 tls.cipher_out_, BufSize, cipher_out_len) ||
                 plain_len > BufSize || cipher_out_len > BufSize) {
-                tls.raw_.close(ci);
+                // close() rather than raw_.close(): it also clears
+                // engine_open_, without which drain_engines() would keep
+                // draining this slot and sending on a closed connection
+                // every tick.
+                tls.close(ci);
                 broker.conn_closed(ci);
                 return Err::malformed;
             }
             // Handshake/alert records the engine wants on the wire.
             if (cipher_out_len > 0) {
                 if (!tls.raw_.send(ci, ByteSpan{tls.cipher_out_, cipher_out_len})) {
-                    tls.raw_.close(ci);
+                    tls.close(ci);  // clears engine_open_ too
                     broker.conn_closed(ci);
                     return Err::capacity;
                 }
