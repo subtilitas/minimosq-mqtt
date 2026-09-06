@@ -204,9 +204,9 @@ test against stock `mosquitto` clients. The whole repository builds
 warning-free with `-Wall -Wextra -Wpedantic -Wconversion
 -Wsign-conversion -Wshadow -Werror`.
 
-[docs/testing.md](docs/testing.md) records what 1.0.0 was tested with in
-full, including the independent suite and interop runs, and what is not
-covered.
+[docs/testing.md](docs/testing.md) records the testing in full — the
+gates, coverage per layer, the independent suite and interop runs, what
+each release artifact was verified against, and what is not covered.
 
 Static analysis runs separately ([`analysis.yml`](.github/workflows/analysis.yml)):
 CodeQL with the `security-and-quality` queries, clang-tidy against the

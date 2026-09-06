@@ -1,8 +1,10 @@
 # Testing
 
-What 1.0.0 was tested with, what the numbers mean, and what is not
+What this library is tested with, what the numbers mean, and what is not
 covered. Every figure here is produced by something in this repository or
-by a run recorded against a named commit — nothing is an estimate.
+by a run recorded against a named commit — nothing is an estimate. The
+figures track the current release; where a measurement belongs to an
+earlier one, it says which.
 
 ## The in-tree suite
 
@@ -149,10 +151,12 @@ shown to discriminate first: a deliberately wrong client-side matcher,
 one where `+` spans a separator, produces 1,570 disagreements over the
 same 7,011 pairs.
 
-**The release artifact.** `minimosq-1.0.0-rc2-headers.tar.gz` was
-downloaded from its release, checked against the shipped `.sha256`,
-confirmed byte-identical to `git archive` of the tag across all 28
-headers, and then used to build another project's broker with no edits.
+**The release artifact.** Every release is checked the same way, and the
+check is on the artifact a consumer downloads rather than on a source
+tree. `minimosq-1.0.0-rc2-headers.tar.gz` was pulled from its release,
+verified against the shipped `.sha256`, confirmed byte-identical to
+`git archive` of the tag across all 28 headers, and then used to build
+another project's broker with no edits.
 
 The same checks pass on each release artifact since.
 `minimosq-1.0.1-headers.tar.gz` has SHA-256
