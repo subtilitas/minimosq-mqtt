@@ -67,26 +67,35 @@ Release **and** Debug are both gated. Debug alone is not enough:
 Measured over `include/minimosq/` by `tools/coverage.py` with GCC 13, the
 pinned compiler. Three numbers, because they answer different questions:
 
-| Measure | 1.0.0 | Floor |
+| Measure | 1.0.1 | Floor |
 |---|---:|---:|
-| Lines fully covered (every branch on the line taken; what Codecov shows) | 89.7% | 85% |
-| Lines executed at least once | 96.3% | — |
-| Branches taken | 83.5% | 80% |
+| Lines fully covered (every branch on the line taken; what Codecov shows) | 89.9% | 85% |
+| Lines executed at least once | 96.4% | — |
+| Branches taken | 81.7% | 80% |
 
-Over 1,854 relevant lines. Per layer:
+Over 1,856 relevant lines. Per layer:
 
 | Layer | Lines | Fully covered |
 |---|---:|---:|
 | core (containers, spans) | 178 | 96.6% |
 | protocol (parse/serialize) | 317 | 94.3% |
-| broker (sessions, routing, ACL) | 834 | 91.5% |
-| transports (POSIX, TLS seam) | 429 | 79.0% |
+| broker (sessions, routing, ACL) | 834 | 91.2% |
+| transports (POSIX, TLS seam) | 431 | 80.3% |
 | top level (`topic.hpp`) | 96 | 93.8% |
 
 The transports are the weakest layer, and the figure is honest about
-where: `unix_socket.hpp` 73.0%, `pipe.hpp` 74.1%, `tcp.hpp` 75.0%,
-`tls_adapter.hpp` 77.5%. These are error paths that need a failing
-`syscall` to reach.
+where: `unix_socket.hpp` 73.0%, `pipe.hpp` 74.1%, `tcp.hpp` 75.0%.
+These are error paths that need a failing `syscall` to reach.
+`tls_adapter.hpp` was among them at 77.5% and is now 84.1%, from the
+regression cases added in 1.0.1.
+
+Branch coverage moved the other way in 1.0.1, 83.5% to 81.7%, and the
+cause is worth stating rather than only the number: the bounds checks
+added guarded paths, and a guard whose false arm no test reaches costs
+branch coverage even though it removes a defect. It stays inside the 80%
+floor. The honest reading is that the guards are only partly exercised —
+each is proved to reject, none is proved to accept every legitimate
+length.
 
 Reproduce the CI figure exactly — the compiler matters:
 
@@ -196,17 +205,22 @@ Two things about that are worth keeping:
 
 Stated rather than omitted.
 
-- **The TLS adapter is not exercised by the independent suite**, which
-  drives the broker through its own recording transport and the interop
-  over plain TCP. In-tree, `tls_adapter.hpp` is at 77.5%.
+- **An engine that breaches its buffer contract is refused, not torn
+  down.** `TlsAdapter::send()` returns false and nothing more, so a
+  caller pacing against what it reads as backpressure retries a broken
+  engine until its own keep-alive or idle deadline. Making it terminal
+  needs a teardown deferred to `tick()`, since `send()` runs inside the
+  broker and cannot report `conn_closed()` without re-entering it.
 - **No TLS engine is bundled.** `NullTlsEngine` is a wiring
   demonstration that copies bytes through unchanged. Nothing gates it
   from shipping as if it were a TLS engine — see
-  [`SECURITY.md`](../SECURITY.md).
-- **The pacing paths added for 1.0** — retained-replay pacing, the queue
-  flush against the outbound ring, PUBREL retransmission, paused output
-  resumed from `tick()` — have in-tree regression tests but no cases of
-  their own in the independent suite; it reaches them only incidentally.
+  [`SECURITY.md`](../SECURITY.md). No test can close this one: a suite
+  can assert that it copies bytes unchanged, which is true and useless,
+  but it cannot assert that a deployment noticed.
+- **The transports below the TLS seam.** `unix_socket.hpp` 73.0%,
+  `pipe.hpp` 74.1%, `tcp.hpp` 75.0%, all error paths needing a failing
+  syscall, and the independent suite drives its own recording transport
+  rather than these.
 - **No fuzzing campaign.** The independent suite's randomized packet
   streams are not a substitute for a coverage-guided fuzzer, and no
   libFuzzer target is in tree.
