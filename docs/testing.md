@@ -205,12 +205,18 @@ Two things about that are worth keeping:
 
 Stated rather than omitted.
 
-- **An engine that breaches its buffer contract is refused, not torn
-  down.** `TlsAdapter::send()` returns false and nothing more, so a
-  caller pacing against what it reads as backpressure retries a broken
-  engine until its own keep-alive or idle deadline. Making it terminal
-  needs a teardown deferred to `tick()`, since `send()` runs inside the
-  broker and cannot report `conn_closed()` without re-entering it.
+- **A TLS engine that reports more bytes than the buffer holds is
+  refused, not torn down.** The engine interface hands each call a
+  buffer and its capacity, and the engine reports back how many bytes it
+  wrote; the contract is that it writes no more than the capacity. An
+  engine that reports more than that is where the 1.0.1 defect came
+  from. Since 1.0.1 the adapter rejects the call, but only that:
+  `TlsAdapter::send()` returns false and nothing more, so a caller
+  pacing against what it reads as backpressure retries an engine that
+  will fail identically every time, until its own keep-alive or idle
+  deadline. Making it terminal needs a teardown deferred to `tick()`,
+  since `send()` runs inside the broker and cannot report
+  `conn_closed()` without re-entering it.
 - **No TLS engine is bundled.** `NullTlsEngine` is a wiring
   demonstration that copies bytes through unchanged. Nothing gates it
   from shipping as if it were a TLS engine — see

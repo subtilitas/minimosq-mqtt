@@ -212,11 +212,13 @@ public:
         // re-entering it — which is the hazard drain_engines() avoids by
         // reporting from tick() — and a slot closed without that report
         // leaves the broker pacing against a connection it still
-        // believes in. A breach is permanent and a caller pacing against
-        // it retries until its own keep-alive or idle deadline; making
-        // that terminal needs a deferred teardown driven from tick(),
-        // which is a change of failure semantics rather than a bounds
-        // check, and is not one to make in a patch release.
+        // believes in. An engine reporting more bytes than the buffer
+        // holds will do it again — the fault is in the engine, not in
+        // the moment — so a caller pacing against the refusal retries
+        // until its own keep-alive or idle deadline. Making that
+        // terminal needs a deferred teardown driven from tick(), which
+        // is a change of failure semantics rather than a bounds check,
+        // and is not one to make in a patch release.
         if (!engines_[ci].encrypt(plaintext, cipher_, sizeof cipher_, cipher_len) ||
             cipher_len > sizeof cipher_) {
             return false;
