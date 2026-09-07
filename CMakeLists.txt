@@ -43,10 +43,38 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     # Strict build flags used for everything in this repository. The library
     # is exception-free and RTTI-free by construction; building the tests with
     # -fno-exceptions/-fno-rtti keeps it honest.
+    #
+    # The second row was measured in Release and Debug before it was adopted:
+    # zero findings across include/, tests/, examples/ and tools/, so it locks
+    # in a property that already held rather than opening a cleanup. Each flag
+    # was also proved to fire against a deliberate violation first — a clean
+    # result from a flag that never reached the translation unit looks
+    # identical to a real one. minimosq has no dependencies, so there is no
+    # third-party noise to filter and the zero means what it says.
+    #
+    # Deliberately absent. All three were measured; none is free:
+    #   -Wswitch-default   would force a default arm onto the switches over
+    #                      EventKind and Err, which is exactly what lets
+    #                      -Wswitch report an enumerator nobody handled.
+    #                      Verified: adding an enumerator makes -Wswitch fire,
+    #                      and a default arm would silence it. 66 findings.
+    #   -Wuseless-cast     fires only on static_cast<int>(::getpid()) passed
+    #                      to a %d, where the cast is what keeps the pair
+    #                      correct if pid_t is ever not int. 3 findings.
+    #   -Wnull-dereference clean in Debug and 16 findings in Release, because
+    #                      GCC runs it after inlining. Every one traces to
+    #                      *session_of(c) in a packet handler, where the null
+    #                      case is refused two inlining levels up: on_packet()
+    #                      rejects any non-CONNECT packet while the connection
+    #                      has no session, and session_of() returns null only
+    #                      in that case. GCC cannot see the guard from there.
     add_library(minimosq_build_flags INTERFACE)
     if(NOT MSVC)
         target_compile_options(minimosq_build_flags INTERFACE
             -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
+            -Wold-style-cast -Wcast-qual -Wcast-align -Wdouble-promotion
+            -Wformat=2 -Wundef -Wnon-virtual-dtor -Woverloaded-virtual
+            -Wimplicit-fallthrough
             -fno-exceptions -fno-rtti)
         if(MINIMOSQ_WERROR)
             target_compile_options(minimosq_build_flags INTERFACE -Werror)

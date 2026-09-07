@@ -48,7 +48,61 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The compiler is pinned rather than left to the runner default.
+      # This job used to take whatever `c++` resolved to, which is GCC —
+      # and the sublchecks below exist only in Clang, so leaving it
+      # implicit would have configured checks that never ran. A flag that
+      # is configured and never executed is worse than one that is
+      # absent: the green tick claims coverage that does not exist.
+      #
+      # Two sublchecks are subtracted, each because it contradicts a
+      # deliberate, documented property rather than because it is noisy:
+      #
+      #   unsigned-integer-overflow    deadline_passed() compares clocks
+      #                                by unsigned difference precisely so
+      #                                the millisecond clock may wrap; the
+      #                                wrap is the design. TableAcl's
+      #                                branch-free select (table_acl.hpp)
+      #                                relies on 0u - 1u for its mask,
+      #                                which is what keeps the credential
+      #                                comparison constant-time.
+      #   implicit-integer-truncation  alloc_packet_id() increments a
+      #                                uint16_t past 65535 and the next
+      #                                two lines exist to catch the wrap:
+      #                                MQTT packet ids are 1..65535
+      #                                [MQTT-2.3.1].
+      #
+      # Everything else in those groups stays on, so signed overflow,
+      # integer sign change, nullability and local-bounds are all live.
+      # Verified: a deliberate signed overflow in a probe is reported.
       - name: Configure
+        env:
+          CXX: clang++
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DMINIMOSQ_WERROR=ON
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined,integer,implicit-conversion,nullability,local-bounds -fno-sanitize=unsigned-integer-overflow,implicit-integer-truncation -fno-sanitize-recover=all -g"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      # The compiler-warning flags are checked by GCC in the build jobs
+      # above; this leg is where the *runtime* half is checked, so it
+      # keeps a GCC pass of plain ASan+UBSan too rather than trading one
+      # compiler's coverage for the other's.
+  sanitize-gcc:
+    name: ASan + UBSan (GCC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        env:
+          CXX: g++
         run: >
           cmake -B build
           -DCMAKE_BUILD_TYPE=Debug
