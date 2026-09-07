@@ -45,6 +45,68 @@ jobs:
   sanitize:
     name: ASan + UBSan
     runs-on: ubuntu-latest
+    env:
+      # Pinned to a version, not just to a family, for the same reason
+      # clang-format and clang-tidy are pinned in analysis.yml: the
+      # contents of a sanitizer group change between releases, so an
+      # unpinned compiler can add a check and turn the gate red on an
+      # image bump with no code change.
+      CXX_FOR_SANITIZE: clang++-18
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install the pinned compiler
+        run: sudo apt-get update && sudo apt-get install -y clang-18
+
+      # The compiler is chosen rather than left to the runner default.
+      # This job used to take whatever `c++` resolved to, which is GCC —
+      # and the subchecks below exist only in Clang, so leaving it
+      # implicit would have configured checks that never ran. A flag that
+      # is configured and never executed is worse than one that is
+      # absent: the green tick claims coverage that does not exist.
+      #
+      # Two subchecks are subtracted, each because it contradicts a
+      # deliberate, documented property rather than because it is noisy:
+      #
+      #   unsigned-integer-overflow    deadline_passed() compares clocks
+      #                                by unsigned difference precisely so
+      #                                the millisecond clock may wrap; the
+      #                                wrap is the design. TableAcl's
+      #                                branch-free select (table_acl.hpp)
+      #                                relies on 0u - 1u for its mask,
+      #                                which is what keeps the credential
+      #                                comparison constant-time.
+      #   implicit-integer-truncation  alloc_packet_id() increments a
+      #                                uint16_t past 65535 and the next
+      #                                two lines exist to catch the wrap:
+      #                                MQTT packet ids are 1..65535
+      #                                [MQTT-2.3.1].
+      #
+      # Everything else in those groups stays on, so signed overflow,
+      # integer sign change, nullability and local-bounds are all live.
+      # Verified: a deliberate signed overflow in a probe is reported.
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DMINIMOSQ_WERROR=ON
+          -DCMAKE_CXX_COMPILER=${{ env.CXX_FOR_SANITIZE }}
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined,integer,implicit-conversion,nullability,local-bounds -fno-sanitize=unsigned-integer-overflow,implicit-integer-truncation -fno-sanitize-recover=all -g"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      # The compiler-warning flags are checked by both compilers in the
+      # build-test matrix above; this leg is where the *runtime* half is
+      # checked. The Clang leg carries the subchecks GCC does not have,
+      # and this one keeps a plain ASan+UBSan pass under GCC, so the two
+      # add rather than trade.
+  sanitize-gcc:
+    name: ASan + UBSan (GCC)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -53,6 +115,7 @@ jobs:
           cmake -B build
           -DCMAKE_BUILD_TYPE=Debug
           -DMINIMOSQ_WERROR=ON
+          -DCMAKE_CXX_COMPILER=g++
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g"
 
       - name: Build
