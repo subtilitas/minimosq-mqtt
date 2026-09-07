@@ -50,12 +50,12 @@ jobs:
 
       # The compiler is pinned rather than left to the runner default.
       # This job used to take whatever `c++` resolved to, which is GCC —
-      # and the sublchecks below exist only in Clang, so leaving it
+      # and the subchecks below exist only in Clang, so leaving it
       # implicit would have configured checks that never ran. A flag that
       # is configured and never executed is worse than one that is
       # absent: the green tick claims coverage that does not exist.
       #
-      # Two sublchecks are subtracted, each because it contradicts a
+      # Two subchecks are subtracted, each because it contradicts a
       # deliberate, documented property rather than because it is noisy:
       #
       #   unsigned-integer-overflow    deadline_passed() compares clocks
@@ -90,10 +90,11 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
 
-      # The compiler-warning flags are checked by GCC in the build jobs
-      # above; this leg is where the *runtime* half is checked, so it
-      # keeps a GCC pass of plain ASan+UBSan too rather than trading one
-      # compiler's coverage for the other's.
+      # The compiler-warning flags are checked by both compilers in the
+      # build-test matrix above; this leg is where the *runtime* half is
+      # checked. The Clang leg carries the subchecks GCC does not have,
+      # and this one keeps a plain ASan+UBSan pass under GCC, so the two
+      # add rather than trade.
   sanitize-gcc:
     name: ASan + UBSan (GCC)
     runs-on: ubuntu-latest
