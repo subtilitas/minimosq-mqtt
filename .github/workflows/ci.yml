@@ -45,10 +45,20 @@ jobs:
   sanitize:
     name: ASan + UBSan
     runs-on: ubuntu-latest
+    env:
+      # Pinned to a version, not just to a family, for the same reason
+      # clang-format and clang-tidy are pinned in analysis.yml: the
+      # contents of a sanitizer group change between releases, so an
+      # unpinned compiler can add a check and turn the gate red on an
+      # image bump with no code change.
+      CXX_FOR_SANITIZE: clang++-18
     steps:
       - uses: actions/checkout@v6
 
-      # The compiler is pinned rather than left to the runner default.
+      - name: Install the pinned compiler
+        run: sudo apt-get update && sudo apt-get install -y clang-18
+
+      # The compiler is chosen rather than left to the runner default.
       # This job used to take whatever `c++` resolved to, which is GCC —
       # and the subchecks below exist only in Clang, so leaving it
       # implicit would have configured checks that never ran. A flag that
@@ -76,12 +86,11 @@ jobs:
       # integer sign change, nullability and local-bounds are all live.
       # Verified: a deliberate signed overflow in a probe is reported.
       - name: Configure
-        env:
-          CXX: clang++
         run: >
           cmake -B build
           -DCMAKE_BUILD_TYPE=Debug
           -DMINIMOSQ_WERROR=ON
+          -DCMAKE_CXX_COMPILER=${{ env.CXX_FOR_SANITIZE }}
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined,integer,implicit-conversion,nullability,local-bounds -fno-sanitize=unsigned-integer-overflow,implicit-integer-truncation -fno-sanitize-recover=all -g"
 
       - name: Build
@@ -102,12 +111,11 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Configure
-        env:
-          CXX: g++
         run: >
           cmake -B build
           -DCMAKE_BUILD_TYPE=Debug
           -DMINIMOSQ_WERROR=ON
+          -DCMAKE_CXX_COMPILER=g++
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g"
 
       - name: Build
