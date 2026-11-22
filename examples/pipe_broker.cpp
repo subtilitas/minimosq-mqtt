@@ -16,7 +16,7 @@
 //
 // SPDX-License-Identifier: MIT
 #include <csignal>
-#include <cstdio>
+#include <iostream>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -59,21 +59,22 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
-    std::printf("pipe_broker: MQTT 3.1.1 broker on %s (in) / %s (out)\n", in_path, out_path);
+    std::cout << "pipe_broker: MQTT 3.1.1 broker on " << in_path << " (in) / " << out_path
+              << " (out)\n";
 
     while (stop_requested == 0) {
         const int rfd = open_fifo(in_path, 0);
         const int wfd = open_fifo(out_path, 0);
         if (rfd < 0 || wfd < 0) {
-            std::fprintf(stderr, "pipe_broker: cannot open FIFOs\n");
+            std::cerr << "pipe_broker: cannot open FIFOs\n";
             return 1;
         }
         if (!transport.open(rfd, wfd)) {
-            std::fprintf(stderr, "pipe_broker: cannot set up transport\n");
+            std::cerr << "pipe_broker: cannot set up transport\n";
             return 1;
         }
         transport.run(broker);  // returns when this client's connection ends
     }
-    std::printf("pipe_broker: shutting down\n");
+    std::cout << "pipe_broker: shutting down\n";
     return 0;
 }
