@@ -320,9 +320,10 @@ TEST(app_publish_reports_capacity_when_the_retained_store_is_full) {
     expect_suback(x.t, 0, 1, codes);
 
     for (size_t i = 0; i < SmallTraits::max_retained; ++i) {
-        char topic[16];
-        std::snprintf(topic, sizeof topic, "fill/%zu", i);
-        CHECK(x.b.publish(topic, wire::bs("v"), QoS::at_most_once, /*retain=*/true) == Err::ok);
+        minitest::TextBuf<16> topic;
+        topic.add("fill/").add(i);
+        CHECK(x.b.publish(topic.c_str(), wire::bs("v"), QoS::at_most_once, /*retain=*/true) ==
+              Err::ok);
     }
     CHECK_EQ(x.b.retained_count(), SmallTraits::max_retained);
 

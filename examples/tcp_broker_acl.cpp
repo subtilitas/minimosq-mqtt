@@ -16,11 +16,10 @@
 //     (refused: anonymous connections are not authorized)
 //
 // SPDX-License-Identifier: MIT
-#include <cerrno>
+#include <charconv>
 #include <csignal>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
+#include <iostream>
 
 #include <minimosq/broker/table_acl.hpp>
 #include <minimosq/minimosq.hpp>
@@ -42,12 +41,12 @@ void on_signal(int) {
     transport.stop();
 }
 
-// Strict port parsing; see tcp_broker.cpp for why atol() is not enough.
+// Strict port parsing; see tcp_broker.cpp for why std::from_chars is used.
 bool parse_port(const char* text, uint16_t& out) {
-    errno = 0;
-    char* end = nullptr;
-    const long value = std::strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value < 1 || value > 65535) {
+    const minimosq::StrView s{text};
+    int value = 0;
+    const auto result = std::from_chars(s.data, s.data + s.len, value);
+    if (result.ec != std::errc{} || result.ptr != s.data + s.len || value < 1 || value > 65535) {
         return false;
     }
     out = static_cast<uint16_t>(value);
@@ -70,7 +69,7 @@ bool configure_acl(Acl& acl) {
 int main(int argc, char** argv) {
     uint16_t port = 1883;
     if (argc > 1 && !parse_port(argv[1], port)) {
-        std::fprintf(stderr, "usage: %s [port]   (1-65535)\n", argv[0]);
+        std::cerr << "usage: " << argv[0] << " [port]   (1-65535)\n";
         return 1;
     }
 
@@ -79,18 +78,17 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal);
 
     if (!configure_acl(broker.security())) {
-        std::fprintf(stderr, "tcp_broker_acl: ACL tables too small\n");
+        std::cerr << "tcp_broker_acl: ACL tables too small\n";
         return 1;
     }
     if (!transport.open(port)) {
-        std::fprintf(stderr, "tcp_broker_acl: cannot listen on port %u\n", port);
+        std::cerr << "tcp_broker_acl: cannot listen on port " << port << '\n';
         return 1;
     }
-    std::printf("tcp_broker_acl: broker with ACLs on port %u (users: sensor-1, sensor-2, "
-                "dashboard; anonymous refused)\n",
-                transport.port());
+    std::cout << "tcp_broker_acl: broker with ACLs on port " << transport.port()
+              << " (users: sensor-1, sensor-2, dashboard; anonymous refused)\n";
 
     transport.run(broker);
-    std::printf("tcp_broker_acl: shutting down\n");
+    std::cout << "tcp_broker_acl: shutting down\n";
     return 0;
 }

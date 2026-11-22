@@ -9,9 +9,54 @@
 #ifndef MINIMOSQ_TESTS_TEST_HPP
 #define MINIMOSQ_TESTS_TEST_HPP
 
-#include <cstdio>
+#include <charconv>
+#include <cstddef>
+#include <iostream>
+#include <type_traits>
 
 namespace minitest {
+
+// Fixed-capacity text builder for test fixtures that need a formatted
+// name (a topic, a socket path). Appends string literals and integers.
+// An append that does not fit sets the overflow flag instead of
+// truncating silently; ok() reports it.
+template <size_t Capacity>
+class TextBuf {
+    static_assert(Capacity > 1, "TextBuf needs room for a terminator");
+
+public:
+    TextBuf& add(const char* s) {
+        while (*s != '\0' && len_ + 1 < Capacity) {
+            data_[len_++] = *s++;
+        }
+        if (*s != '\0') {
+            overflow_ = true;
+        }
+        data_[len_] = '\0';
+        return *this;
+    }
+
+    template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+    TextBuf& add(T value) {
+        const auto r = std::to_chars(data_ + len_, data_ + Capacity - 1, value);
+        if (r.ec == std::errc{}) {
+            len_ = static_cast<size_t>(r.ptr - data_);
+        } else {
+            overflow_ = true;
+        }
+        data_[len_] = '\0';
+        return *this;
+    }
+
+    const char* c_str() const { return data_; }
+    size_t size() const { return len_; }
+    bool ok() const { return !overflow_; }
+
+private:
+    char data_[Capacity] = {};
+    size_t len_ = 0;
+    bool overflow_ = false;
+};
 
 struct Case {
     const char* name;
@@ -47,7 +92,7 @@ struct Registrar {
 
 inline void fail(const char* file, int line, const char* expr) {
     ++failures();
-    std::printf("FAIL %s (%s:%d): %s\n", current(), file, line, expr);
+    std::cout << "FAIL " << current() << " (" << file << ':' << line << "): " << expr << '\n';
 }
 
 // Integer-flavoured equality check that prints both values on failure.
@@ -56,8 +101,9 @@ template <typename A, typename B>
 inline void check_eq(const char* file, int line, const char* expr, const A& a, const B& b) {
     if (!(a == b)) {
         ++failures();
-        std::printf("FAIL %s (%s:%d): %s (lhs=%lld rhs=%lld)\n", current(), file, line, expr,
-                    static_cast<long long>(a), static_cast<long long>(b));
+        std::cout << "FAIL " << current() << " (" << file << ':' << line << "): " << expr
+                  << " (lhs=" << static_cast<long long>(a) << " rhs=" << static_cast<long long>(b)
+                  << ")\n";
     }
 }
 
@@ -69,10 +115,11 @@ inline int run_all() {
         ++count;
     }
     if (failures() == 0) {
-        std::printf("OK: %d test case(s) passed\n", count);
+        std::cout << "OK: " << count << " test case(s) passed\n";
         return 0;
     }
-    std::printf("FAILED: %d check(s) failed across %d test case(s)\n", failures(), count);
+    std::cout << "FAILED: " << failures() << " check(s) failed across " << count
+              << " test case(s)\n";
     return 1;
 }
 

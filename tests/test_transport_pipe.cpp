@@ -8,8 +8,8 @@
 #include <minimosq/broker/broker.hpp>
 #include <minimosq/transports/posix/pipe.hpp>
 
+#include <algorithm>
 #include <csignal>
-#include <cstring>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -212,7 +212,7 @@ TEST(pipe_output_from_tick_leaves_in_the_same_pass) {
     CHECK_EQ(b.sends_ok, 1);
     uint8_t buf[8];
     CHECK_EQ(receive(t, b, pp.b2c[0], buf, 4), size_t{4});
-    CHECK(std::memcmp(buf, "tick", 4) == 0);
+    CHECK(std::equal(buf, buf + 4, "tick"));
     ::close(pp.c2b[1]);
     ::close(pp.b2c[0]);
 }
@@ -229,7 +229,7 @@ TEST(pipe_pass_larger_than_the_ring_is_written_not_dropped) {
     t.poll_once(b, 5);
 
     uint8_t chunk[100];
-    std::memset(chunk, 0x55, sizeof chunk);
+    std::fill(chunk, chunk + sizeof chunk, uint8_t{0x55});
     b.reply = ByteSpan{chunk, sizeof chunk};
     b.replies = 8;  // 800 bytes into a 256-byte ring from one conn_data()
     send_all(pp.c2b[1], wire::make_pingreq().span());
@@ -264,7 +264,7 @@ TEST(pipe_reply_reaches_a_peer_that_closed_its_write_end) {
     CHECK_EQ(b.sends_ok, 1);
     uint8_t buf[8];
     CHECK_EQ(receive(t, b, pp.b2c[0], buf, 4), size_t{4});
-    CHECK(std::memcmp(buf, "pong", 4) == 0);
+    CHECK(std::equal(buf, buf + 4, "pong"));
     ::close(pp.b2c[0]);
 }
 
@@ -281,7 +281,7 @@ TEST(pipe_span_that_still_does_not_fit_after_a_write_is_refused) {
     // Nobody reads b2c: the pipe takes its capacity (64 KiB by default),
     // then every write is EAGAIN and the ring cannot be emptied.
     uint8_t chunk[100];
-    std::memset(chunk, 0x55, sizeof chunk);
+    std::fill(chunk, chunk + sizeof chunk, uint8_t{0x55});
     b.reply = ByteSpan{chunk, sizeof chunk};
     b.replies = 2000;  // 200 KB
     send_all(pp.c2b[1], wire::make_pingreq().span());

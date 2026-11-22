@@ -8,7 +8,7 @@
 //
 // SPDX-License-Identifier: MIT
 #include <csignal>
-#include <cstdio>
+#include <iostream>
 
 #include <minimosq/minimosq.hpp>
 #include <minimosq/transports/posix/unix_socket.hpp>
@@ -35,12 +35,12 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal);
 
     if (!transport.open(path)) {
-        std::fprintf(stderr, "uds_broker: cannot listen on %s\n", path);
+        std::cerr << "uds_broker: cannot listen on " << path << '\n';
         return 1;
     }
-    std::printf("uds_broker: MQTT 3.1.1 broker listening on %s\n", path);
+    std::cout << "uds_broker: MQTT 3.1.1 broker listening on " << path << '\n';
 
     transport.run(broker);
-    std::printf("uds_broker: shutting down\n");
+    std::cout << "uds_broker: shutting down\n";
     return 0;
 }

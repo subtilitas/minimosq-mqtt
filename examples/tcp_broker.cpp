@@ -10,11 +10,10 @@
 // transport live in static storage, sized entirely by BrokerTraits.
 //
 // SPDX-License-Identifier: MIT
-#include <cerrno>
+#include <charconv>
 #include <csignal>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
+#include <iostream>
 
 #include <minimosq/minimosq.hpp>
 #include <minimosq/transports/posix/tcp.hpp>
@@ -31,14 +30,14 @@ void on_signal(int) {
     transport.stop();
 }
 
-// Strict port parsing. atol() reports no error at all: it cannot tell
-// "0" from "abc", and it silently accepts trailing garbage, so "1883x"
-// would start a broker on 1883 rather than complain.
+// Strict port parsing. std::from_chars reports failure and the end of
+// the number, so the whole argument must be consumed: "1883x" is
+// rejected rather than read as 1883, and "0" and "abc" are errors.
 bool parse_port(const char* text, uint16_t& out) {
-    errno = 0;
-    char* end = nullptr;
-    const long value = std::strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value < 1 || value > 65535) {
+    const minimosq::StrView s{text};
+    int value = 0;
+    const auto result = std::from_chars(s.data, s.data + s.len, value);
+    if (result.ec != std::errc{} || result.ptr != s.data + s.len || value < 1 || value > 65535) {
         return false;
     }
     out = static_cast<uint16_t>(value);
@@ -50,7 +49,7 @@ bool parse_port(const char* text, uint16_t& out) {
 int main(int argc, char** argv) {
     uint16_t port = 1883;
     if (argc > 1 && !parse_port(argv[1], port)) {
-        std::fprintf(stderr, "usage: %s [port]   (1-65535)\n", argv[0]);
+        std::cerr << "usage: " << argv[0] << " [port]   (1-65535)\n";
         return 1;
     }
 
@@ -59,13 +58,14 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal);
 
     if (!transport.open(port)) {
-        std::fprintf(stderr, "tcp_broker: cannot listen on port %u\n", port);
+        std::cerr << "tcp_broker: cannot listen on port " << port << '\n';
         return 1;
     }
-    std::printf("tcp_broker: MQTT 3.1.1 broker listening on port %u\n", transport.port());
-    std::printf("tcp_broker: broker state is %zu bytes, statically allocated\n", sizeof broker);
+    std::cout << "tcp_broker: MQTT 3.1.1 broker listening on port " << transport.port() << '\n';
+    std::cout << "tcp_broker: broker state is " << sizeof broker
+              << " bytes, statically allocated\n";
 
     transport.run(broker);
-    std::printf("tcp_broker: shutting down\n");
+    std::cout << "tcp_broker: shutting down\n";
     return 0;
 }

@@ -187,9 +187,9 @@ TEST(retained_store_replaces_rather_than_duplicating) {
 TEST(retained_store_full_refuses_new_topics_but_still_replaces) {
     RetainedStore<SmallTraits> store;
     for (size_t i = 0; i < SmallTraits::max_retained; ++i) {
-        char topic[16];
-        std::snprintf(topic, sizeof topic, "t/%zu", i);
-        CHECK(store.set(topic, wire::bs("v"), QoS::at_most_once) == RetainStatus::stored);
+        minitest::TextBuf<16> topic;
+        topic.add("t/").add(i);
+        CHECK(store.set(topic.c_str(), wire::bs("v"), QoS::at_most_once) == RetainStatus::stored);
     }
     CHECK_EQ(store.size(), SmallTraits::max_retained);
 

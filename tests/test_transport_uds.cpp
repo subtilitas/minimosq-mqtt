@@ -8,7 +8,6 @@
 
 #include <cerrno>
 #include <csignal>
-#include <cstdio>
 #include <cstdlib>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -93,8 +92,10 @@ bool wait_packet(Transport& t, B& b, int fd, uint8_t* buf, size_t cap, size_t& g
 
 TEST(uds_end_to_end_pubsub) {
     std::signal(SIGPIPE, SIG_IGN);
-    char path[64];
-    std::snprintf(path, sizeof path, "/tmp/minimosq-test-%d.sock", static_cast<int>(::getpid()));
+    minitest::TextBuf<64> path_buf;
+    path_buf.add("/tmp/minimosq-test-").add(static_cast<int>(::getpid())).add(".sock");
+    CHECK(path_buf.ok());
+    const char* path = path_buf.c_str();
 
     Transport t;
     Broker<TinyTraits, Transport> b{t};
@@ -132,8 +133,10 @@ TEST(uds_end_to_end_pubsub) {
 // ------------------------------------------- post-review regressions
 
 TEST(uds_socket_is_created_with_restrictive_permissions) {
-    char path[64];
-    std::snprintf(path, sizeof path, "/tmp/minimosq-perm-%d.sock", static_cast<int>(::getpid()));
+    minitest::TextBuf<64> path_buf;
+    path_buf.add("/tmp/minimosq-perm-").add(static_cast<int>(::getpid())).add(".sock");
+    CHECK(path_buf.ok());
+    const char* path = path_buf.c_str();
     ::unlink(path);
 
     Transport t;
@@ -148,8 +151,10 @@ TEST(uds_socket_is_created_with_restrictive_permissions) {
 }
 
 TEST(uds_socket_mode_is_configurable) {
-    char path[64];
-    std::snprintf(path, sizeof path, "/tmp/minimosq-perm2-%d.sock", static_cast<int>(::getpid()));
+    minitest::TextBuf<64> path_buf;
+    path_buf.add("/tmp/minimosq-perm2-").add(static_cast<int>(::getpid())).add(".sock");
+    CHECK(path_buf.ok());
+    const char* path = path_buf.c_str();
     ::unlink(path);
 
     Transport t;

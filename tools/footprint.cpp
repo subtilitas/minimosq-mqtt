@@ -10,7 +10,7 @@
 //   component<TAB>name<TAB>bytes
 //
 // SPDX-License-Identifier: MIT
-#include <cstdio>
+#include <iostream>
 
 #include <minimosq/broker/table_acl.hpp>
 #include <minimosq/minimosq.hpp>
@@ -75,9 +75,9 @@ void report(const char* name) {
     static_assert(Traits::max_payload_len <= Traits::max_packet_size,
                   "stored payloads cannot exceed the largest accepted packet");
 
-    std::printf("config\t%s\t%zu\t%zu\t%zu\t%zu\t%zu\n", name, Traits::max_connections,
-                Traits::max_sessions, Traits::max_packet_size, Traits::max_payload_len,
-                sizeof(Broker<Traits, NullTransport>));
+    std::cout << "config\t" << name << '\t' << Traits::max_connections << '\t'
+              << Traits::max_sessions << '\t' << Traits::max_packet_size << '\t'
+              << Traits::max_payload_len << '\t' << sizeof(Broker<Traits, NullTransport>) << '\n';
 }
 
 }  // namespace
@@ -90,13 +90,13 @@ int main() {
 
     // Where the bytes go, for the default configuration.
     using T = minimosq::DefaultTraits;
-    std::printf("component\tPer connection (frame parser + state)\t%zu\n",
-                sizeof(minimosq::FrameParser<T::max_packet_size>));
-    std::printf("component\tPer session (subs, queues, will)\t%zu\n",
-                sizeof(minimosq::Session<T, minimosq::AllowAllSecurity::Context>));
-    std::printf("component\tPer retained message\t%zu\n",
-                sizeof(minimosq::RetainedStore<T>::Entry));
-    std::printf("component\tWith TableAcl<8,16> instead of AllowAllSecurity\t%zu\n",
-                sizeof(Broker<T, NullTransport, minimosq::TableAcl<8, 16>>));
+    std::cout << "component\tPer connection (frame parser + state)\t"
+              << sizeof(minimosq::FrameParser<T::max_packet_size>) << '\n';
+    std::cout << "component\tPer session (subs, queues, will)\t"
+              << sizeof(minimosq::Session<T, minimosq::AllowAllSecurity::Context>) << '\n';
+    std::cout << "component\tPer retained message\t" << sizeof(minimosq::RetainedStore<T>::Entry)
+              << '\n';
+    std::cout << "component\tWith TableAcl<8,16> instead of AllowAllSecurity\t"
+              << sizeof(Broker<T, NullTransport, minimosq::TableAcl<8, 16>>) << '\n';
     return 0;
 }
