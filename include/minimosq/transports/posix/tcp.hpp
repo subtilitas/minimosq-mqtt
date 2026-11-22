@@ -10,8 +10,6 @@
 #ifndef MINIMOSQ_TRANSPORTS_POSIX_TCP_HPP
 #define MINIMOSQ_TRANSPORTS_POSIX_TCP_HPP
 
-#include <cstring>
-
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>

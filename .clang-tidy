@@ -85,11 +85,10 @@ Checks: >
 #       harness's own CHECK and TEST. Wrong tool for this layout.
 #
 #   cert-err33-c                          (29 findings before suppression)
-#       Flags discarding the return value of std::fprintf and
-#       std::signal. The library itself never calls either; every finding
-#       is in an example printing a diagnostic to stderr immediately
-#       before returning failure, where there is nothing useful to do
-#       with the result.
+#       Flags discarding the return value of std::signal. The library
+#       itself never calls it; every finding is in an example or test
+#       installing a handler, where there is nothing useful to do with
+#       the result.
 #
 #   clang-analyzer-security.ArrayBound
 #       One false positive, on StrView::operator[] reached through
