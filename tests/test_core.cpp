@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: MIT
 #include "test.hpp"
 
-#include <cstdio>
-
 #include <minimosq/core/error.hpp>
 #include <minimosq/core/fixed_buffer.hpp>
 #include <minimosq/core/fixed_string.hpp>
@@ -378,12 +376,10 @@ TEST(version_macros_agree_with_constants) {
     // The string is built from the same three numbers, so this is really
     // a check that the stringification survived two macro expansions
     // rather than emitting "MINIMOSQ_VERSION_MAJOR.".
-    char expected[16];
-    const int n = std::snprintf(expected, sizeof expected, "%d.%d.%d", version_major, version_minor,
-                                version_patch);
-    CHECK(n > 0);
-    CHECK(static_cast<size_t>(n) < sizeof expected);
-    CHECK(StrView(version_string) == StrView(expected));
+    minitest::TextBuf<16> expected;
+    expected.add(version_major).add(".").add(version_minor).add(".").add(version_patch);
+    CHECK(expected.ok());
+    CHECK(StrView(version_string) == StrView(expected.c_str()));
     CHECK(StrView(MINIMOSQ_VERSION_STRING) == StrView(version_string));
 }
 

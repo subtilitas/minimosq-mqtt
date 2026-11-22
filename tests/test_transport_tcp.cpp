@@ -8,10 +8,10 @@
 #include <minimosq/broker/broker.hpp>
 #include <minimosq/transports/posix/tcp.hpp>
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <csignal>
-#include <cstring>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
@@ -391,7 +391,7 @@ TEST(tcp_output_from_tick_leaves_in_the_same_pass) {
     CHECK_EQ(b.sends_ok, 1);
     receive(t, b, c, 4);
     CHECK_EQ(c.rx_len, size_t{4});
-    CHECK(std::memcmp(c.rx, "tick", 4) == 0);
+    CHECK(std::equal(c.rx, c.rx + 4, "tick"));
     c.close();
 }
 
@@ -404,7 +404,7 @@ TEST(tcp_pass_larger_than_the_ring_is_written_not_dropped) {
     CHECK(accept_one(t, b, c));
 
     uint8_t chunk[100];
-    std::memset(chunk, 0x55, sizeof chunk);
+    std::fill(chunk, chunk + sizeof chunk, uint8_t{0x55});
     b.reply = ByteSpan{chunk, sizeof chunk};
     b.replies = 8;  // 800 bytes into a 256-byte ring from one conn_data()
     c.send_pkt(wire::make_pingreq());
@@ -435,7 +435,7 @@ TEST(tcp_reply_reaches_a_peer_that_half_closed) {
     CHECK_EQ(t.native_handle(0), -1);
     receive(t, b, c, 4);
     CHECK_EQ(c.rx_len, size_t{4});
-    CHECK(std::memcmp(c.rx, "pong", 4) == 0);
+    CHECK(std::equal(c.rx, c.rx + 4, "pong"));
     c.close();
 }
 
@@ -509,7 +509,7 @@ TEST(tcp_span_that_still_does_not_fit_after_a_write_is_refused) {
     CHECK(::setsockopt(t.native_handle(0), SOL_SOCKET, SO_SNDBUF, &small, sizeof small) == 0);
 
     uint8_t chunk[100];
-    std::memset(chunk, 0x55, sizeof chunk);
+    std::fill(chunk, chunk + sizeof chunk, uint8_t{0x55});
     b.reply = ByteSpan{chunk, sizeof chunk};
     b.replies = 2000;  // 200 KB at a peer that takes a few KB and stops
     c.send_pkt(wire::make_pingreq());
